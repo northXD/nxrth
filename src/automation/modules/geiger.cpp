@@ -1014,15 +1014,21 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     // A bot should hold exactly ONE counter. Keep the DEAD one if we have it (it is
     // recharging in-game); otherwise keep one charged counter. Everything else is
     // dropped. Mirrors Mori's rotation.dropExcess (e.g. 11 charged + 1 dead -> drop
-    // all 11 charged). Prefer the dedicated pickup/geiger depot so prize storage
-    // remains separate; fall back to the loot depot only when no pickup world exists.
+    // all 11 charged). Counter cleanup uses ONLY the dedicated pickup/geiger depot;
+    // prize storage must never receive counters.
     // Only run in a REAL world (never at the white door -> section 4 warps us back
     // to hunt = the recovery). If depositing keeps failing, back off 5 min and hunt
     // with the extras rather than looping forever.
     {
         const std::uint32_t plain_cnt = inv_amount(inv, item);
         const std::uint32_t dead_cnt = inv_amount(inv, kDeadGeigerId);
-        const auto& drop_worlds = !pickup.empty() ? pickup : depot;
+        const auto& drop_worlds = pickup;
+        if (plain_cnt + dead_cnt > 1 && drop_worlds.empty() &&
+            Clock::now() >= counter_deposit_off_until_) {
+            self.log("[geiger] extra counters kept: no pickup/geiger depot configured; "
+                     "loot depot will not be used");
+            counter_deposit_off_until_ = Clock::now() + std::chrono::minutes(5);
+        }
         if (self.in_world() && !drop_worlds.empty() && plain_cnt + dead_cnt > 1 &&
             Clock::now() >= counter_deposit_off_until_) {
             reset_hunt_state();
