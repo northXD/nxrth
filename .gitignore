@@ -1,0 +1,28 @@
+# Build
+/build/
+/out/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+
+# vcpkg
+/vcpkg_installed/
+
+# ImGui layout
+adonai_imgui.ini
+
+# Local data / secrets
+/data/proxy_pool.json
+/data/accounts*.json
+/data/account_devices.json
+/data/items.dat
+/items.dat
+*.log
+
+# IDE
+.vs/
+.idea/
+CMakeSettings.json
