@@ -55,7 +55,10 @@ namespace adonai::automation {
 //   params["geiger_max_y"]        = "53"                   search grid max Y
 //   params["geiger_world_width"]  = "100"                  search grid width cap
 //   params["geiger_signal_wait_ms"]= "4200"               wait for a fresh particle per probe
+//   params["geiger_settle_ms"]     = "700"                settle after reaching a probe tile
 //   params["geiger_max_steps"]    = "70"                   probe budget per hunt
+//   params["geiger_pickup_scan_ms"]= "3000"               empty pickup-depot scan interval
+//   params["geiger_pickup_empty_scans"]= "12"             scans before rotating depot
 // ---------------------------------------------------------------------------
 class GeigerModule : public adonai::bot::AutomationModule {
 public:
@@ -81,10 +84,18 @@ private:
         std::uint16_t y = 0;
     };
 
+    enum class DoorCheck { Verified, Cautious, Mismatch };
+
     // ---- world/warp/claim plumbing (unchanged from the working farm loop) ----
     void release_claim(adonai::bot::FleetState& fleet);
+    void release_pickup_claim(adonai::bot::FleetState& fleet);
     bool warp_towards(adonai::bot::BotContext& self, const std::string& cur,
-                      const std::pair<std::string, std::string>& target);
+                       const std::pair<std::string, std::string>& target);
+    DoorCheck check_target_door(adonai::bot::BotContext& self,
+                                const std::pair<std::string, std::string>& target) const;
+    bool refresh_hunt_world(adonai::bot::BotContext& self,
+                            const std::pair<std::string, std::string>& target,
+                            const std::string& reason);
     // Force auto-collect OFF around a depot deposit (so the bot doesn't re-vacuum
     // its own drops / everything on the depot ground) and restore the user's value
     // once hunting resumes. Idempotent.
@@ -106,6 +117,8 @@ private:
     // all of it), never the counters or the account's own items.
     std::unordered_map<std::uint16_t, std::uint32_t> build_prize_plan(
         const adonai::world::Inventory& inv, std::uint16_t item) const;
+    bool try_pickup_counter(adonai::bot::BotContext& self, std::uint16_t item,
+                            std::uint64_t scan_ms, int empty_scan_limit);
 
     // ---- candidate-elimination search (ported from Mori) ---------------------
     void reset_hunt_state();
@@ -132,11 +145,15 @@ private:
     // ---- persistent per-bot state (GeigerModule is instantiated per Bot) ------
     std::string world_name_;   // uppercased world we're currently in
     std::string claim_key_;    // the "geiger:WORLD:x,y" we own ("" = none)
+    std::string pickup_claim_key_;  // serializes bots entering a pickup depot
     std::uint32_t bot_id_ = 0;
 
     Clock::time_point recharge_until_{};  // radioactive until this time (post-prize)
     Clock::time_point last_warp_{};       // debounce warp spam
     std::string last_warp_target_;        // world we last asked to warp to
+    std::string door_retry_target_;
+    Clock::time_point door_retry_after_{};
+    int door_retry_count_ = 0;
 
     // search state (the whole point of the redesign)
     std::vector<Point> candidates_;                          // surviving prize tiles
@@ -152,6 +169,13 @@ private:
     bool collect_off_ = false;      // we forced auto-collect off for a deposit
     bool collect_saved_ = true;     // the user's auto-collect value to restore after
     int no_signal_probes_ = 0;      // consecutive probes with no geiger particle
+    int signal_refresh_attempts_ = 0;  // rejoin first, only then distrust stale equip state
+    bool waiting_for_charge_ = false;
+    bool was_offline_ = false;
+    std::size_t pickup_target_offset_ = 0;
+    int pickup_empty_scans_ = 0;
+    Clock::time_point pickup_next_scan_{};
+    Clock::time_point pickup_retry_after_{};
     int counter_deposit_fails_ = 0;                 // consecutive zero-progress counter deposits
     Clock::time_point counter_deposit_off_until_{};  // skip the excess-counter deposit until this time
     std::unordered_set<std::uint16_t> drop_ids_;          // geiger PRIZE ids (the only ones to drop)

@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "automation/geiger_stats.h"  // fleet-wide aggregate + webhook message store
@@ -55,6 +57,26 @@ std::string upper(std::string s) {
     return s;
 }
 
+std::string normalize_door_label(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(value[i]);
+        if (c == '`' && i + 1 < value.size()) {
+            ++i;  // Growtopia color/control pair.
+            continue;
+        }
+        if (std::isalnum(c) || c == '_' || c == '-')
+            out.push_back(static_cast<char>(std::toupper(c)));
+    }
+    return out;
+}
+
+std::string loaded_world_name(const adonai::bot::BotContext& self) {
+    if (!self.world()) return {};
+    return upper(self.world()->tile_map.world_name);
+}
+
 int atoi_or(const std::string& s, int fallback) {
     try {
         return std::stoi(s);
@@ -78,10 +100,24 @@ std::vector<std::pair<std::string, std::string>> parse_worlds(const std::string&
         cur.clear();
         std::string name = entry, door;
         const auto colon = entry.find(':');
-        if (colon != std::string::npos) {
-            name = entry.substr(0, colon);
-            door = entry.substr(colon + 1);
+        const auto pipe = entry.find('|');
+        const auto split = colon == std::string::npos ? pipe
+                           : pipe == std::string::npos ? colon
+                                                      : std::min(colon, pipe);
+        if (split != std::string::npos) {
+            name = entry.substr(0, split);
+            door = entry.substr(split + 1);
         }
+        const auto nb = name.find_first_not_of(" \t\r\n");
+        if (nb == std::string::npos)
+            name.clear();
+        else
+            name = name.substr(nb, name.find_last_not_of(" \t\r\n") - nb + 1);
+        const auto db = door.find_first_not_of(" \t\r\n");
+        if (db == std::string::npos)
+            door.clear();
+        else
+            door = door.substr(db, door.find_last_not_of(" \t\r\n") - db + 1);
         name = upper(name);
         if (!name.empty()) out.emplace_back(std::move(name), std::move(door));
     };
@@ -150,17 +186,105 @@ void GeigerModule::release_claim(adonai::bot::FleetState& fleet) {
     }
 }
 
-bool GeigerModule::warp_towards(adonai::bot::BotContext& self, const std::string& cur,
-                                const std::pair<std::string, std::string>& target) {
-    if (cur == target.first) return false;  // already in the target world
-    const auto now = Clock::now();
-    // Debounce: don't re-issue the same warp every 10 ms tick while it's in flight.
-    if (target.first != last_warp_target_ || now - last_warp_ > std::chrono::seconds(10)) {
-        self.warp(target.first, target.second);
-        last_warp_ = now;
-        last_warp_target_ = target.first;
+void GeigerModule::release_pickup_claim(adonai::bot::FleetState& fleet) {
+    if (!pickup_claim_key_.empty()) {
+        fleet.release(pickup_claim_key_, bot_id_);
+        pickup_claim_key_.clear();
     }
-    return true;  // not there yet -> caller should wait
+}
+
+GeigerModule::DoorCheck GeigerModule::check_target_door(
+    adonai::bot::BotContext& self,
+    const std::pair<std::string, std::string>& target) const {
+    if (target.second.empty()) return DoorCheck::Verified;
+    const auto& world = self.world();
+    if (!world || upper(world->tile_map.world_name) != target.first) return DoorCheck::Mismatch;
+
+    const std::string wanted = normalize_door_label(target.second);
+    const adonai::world::Tile* wanted_tile = nullptr;
+    const adonai::world::Tile* main_tile = nullptr;
+    for (const auto& tile : world->tile_map.tiles) {
+        const auto* door = std::get_if<adonai::world::tiletype::Door>(&tile.tile_type);
+        const bool is_door = tile.fg_item_id == 6 || door != nullptr;
+        if (!is_door) continue;
+        const std::string label = door ? normalize_door_label(door->label) : std::string();
+        if (!wanted.empty() && label == wanted) wanted_tile = &tile;
+        if (!main_tile && (tile.fg_item_id == 6 || label.empty())) main_tile = &tile;
+    }
+
+    const int here_x = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
+    const int here_y = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+    if (wanted_tile && dist2i(here_x, here_y, static_cast<int>(wanted_tile->x),
+                              static_cast<int>(wanted_tile->y)) <= 16.0)
+        return DoorCheck::Verified;
+    if (main_tile && dist2i(here_x, here_y, static_cast<int>(main_tile->x),
+                            static_cast<int>(main_tile->y)) <= 16.0)
+        return DoorCheck::Mismatch;
+    if (wanted_tile) return DoorCheck::Mismatch;
+
+    // Some worlds hide a linked-door extra from the map. If we are not standing
+    // at the main door, match Mori's cautious acceptance instead of deadlocking.
+    return DoorCheck::Cautious;
+}
+
+bool GeigerModule::warp_towards(adonai::bot::BotContext& self, const std::string& cur,
+                                 const std::pair<std::string, std::string>& target) {
+    const auto now = Clock::now();
+    const std::string target_key = target.first + ":" + normalize_door_label(target.second);
+    if (cur != target.first || !self.in_world()) {
+        // Debounce: don't re-issue the same warp every 10 ms tick while it is in flight.
+        if (target_key != last_warp_target_ || now - last_warp_ > std::chrono::seconds(10)) {
+            self.warp(target.first, target.second);
+            last_warp_ = now;
+            last_warp_target_ = target_key;
+        }
+        return true;
+    }
+
+    const DoorCheck check = check_target_door(self, target);
+    if (check != DoorCheck::Mismatch) {
+        door_retry_target_.clear();
+        door_retry_count_ = 0;
+        return false;
+    }
+
+    if (door_retry_target_ != target_key) {
+        door_retry_target_ = target_key;
+        door_retry_count_ = 0;
+        door_retry_after_ = now + std::chrono::milliseconds(1200);
+    }
+    if (now < door_retry_after_) return true;
+
+    if (door_retry_count_ >= 3) {
+        self.log("[geiger] door verification failed for " + target_key +
+                 "; refusing depot action and retrying in 30s");
+        door_retry_count_ = 0;
+        door_retry_after_ = now + std::chrono::seconds(30);
+        return true;
+    }
+
+    ++door_retry_count_;
+    self.log("[geiger] stuck at main/wrong door for " + target_key + "; retry " +
+             std::to_string(door_retry_count_) + "/3");
+    self.warp(target.first, target.second);
+    last_warp_ = now;
+    last_warp_target_ = target_key;
+    door_retry_after_ = now + std::chrono::seconds(4);
+    return true;
+}
+
+bool GeigerModule::refresh_hunt_world(
+    adonai::bot::BotContext& self, const std::pair<std::string, std::string>& target,
+    const std::string& reason) {
+    self.log("[geiger] " + reason + "; rejoining " + target.first);
+    self.leave_world();
+    self.idle(1200);
+    self.warp(target.first, target.second);
+    last_warp_ = Clock::now();
+    last_warp_target_ = target.first + ":" + normalize_door_label(target.second);
+    door_retry_target_.clear();
+    reset_hunt_state();
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +327,100 @@ std::unordered_map<std::uint16_t, std::uint32_t> GeigerModule::build_prize_plan(
     return plan;
 }
 
+bool GeigerModule::try_pickup_counter(adonai::bot::BotContext& self, std::uint16_t item,
+                                      std::uint64_t scan_ms, int empty_scan_limit) {
+    const auto now = Clock::now();
+    if (now < pickup_next_scan_ || !self.world()) return false;
+
+    const auto& objects = self.world()->objects;
+    const auto here_x = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
+    const auto here_y = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+    std::vector<adonai::world::WorldObject> counters;
+    for (const auto& object : objects) {
+        if (object.item_id != item && object.item_id != kDeadGeigerId) continue;
+        counters.push_back(object);
+    }
+    std::sort(counters.begin(), counters.end(), [&](const auto& a, const auto& b) {
+        if ((a.item_id == item) != (b.item_id == item)) return a.item_id == item;
+        const auto ax = static_cast<int>(adonai::world::pixel_to_tile(a.x));
+        const auto ay = static_cast<int>(adonai::world::pixel_to_tile(a.y));
+        const auto bx = static_cast<int>(adonai::world::pixel_to_tile(b.x));
+        const auto by = static_cast<int>(adonai::world::pixel_to_tile(b.y));
+        return dist2i(here_x, here_y, ax, ay) < dist2i(here_x, here_y, bx, by);
+    });
+
+    if (counters.empty()) {
+        ++pickup_empty_scans_;
+        if (pickup_empty_scans_ == 1 || pickup_empty_scans_ % 5 == 0) {
+            self.log("[geiger] no counter object in pickup depot (" +
+                     std::to_string(pickup_empty_scans_) + "/" +
+                     std::to_string(empty_scan_limit) + ")");
+        }
+        pickup_next_scan_ = now + std::chrono::milliseconds(scan_ms);
+        return false;
+    }
+
+    const std::string before_world = loaded_world_name(self);
+    const std::uint32_t before_total =
+        inv_amount(self.inventory(), item) + inv_amount(self.inventory(), kDeadGeigerId);
+
+    static constexpr int kOffsets[][2] = {
+        {0, 0},  {1, 0},  {-1, 0}, {0, -1}, {0, 1}, {2, 0}, {-2, 0},
+        {0, -2}, {0, 2},  {1, -1}, {-1, -1}, {1, 1}, {-1, 1},
+    };
+    for (const auto& object : counters) {
+        const int tx = static_cast<int>(adonai::world::pixel_to_tile(object.x));
+        const int ty = static_cast<int>(adonai::world::pixel_to_tile(object.y));
+        self.log("[geiger] pickup counter item=" + std::to_string(object.item_id) + " uid=" +
+                 std::to_string(object.uid) + " at " + std::to_string(tx) + ":" +
+                 std::to_string(ty));
+
+        for (const auto& offset : kOffsets) {
+            if (!self.world() || loaded_world_name(self) != before_world) return false;
+            const int px = tx + offset[0], py = ty + offset[1];
+            if (px < 0 || py < 0 || px >= static_cast<int>(self.world()->tile_map.width) ||
+                py >= static_cast<int>(self.world()->tile_map.height))
+                continue;
+            const int cx = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
+            const int cy = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+            if (cx != px || cy != py) {
+                const auto path = self.compute_path(static_cast<std::uint32_t>(px),
+                                                    static_cast<std::uint32_t>(py));
+                if (path.empty()) continue;
+                self.find_path(static_cast<std::uint32_t>(px), static_cast<std::uint32_t>(py));
+            }
+            if (!self.world() || loaded_world_name(self) != before_world) return false;
+            const int ax = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
+            const int ay = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+            if (dist2i(ax, ay, tx, ty) > 25.0) continue;
+
+            self.collect_object_at(object.uid, 3.0f);
+            self.idle(900);
+            std::uint32_t after_total =
+                inv_amount(self.inventory(), item) + inv_amount(self.inventory(), kDeadGeigerId);
+            if (after_total <= before_total) {
+                self.collect_object_at(object.uid, 5.0f);
+                self.idle(900);
+                after_total = inv_amount(self.inventory(), item) +
+                              inv_amount(self.inventory(), kDeadGeigerId);
+            }
+            if (after_total > before_total) {
+                self.log("[geiger] pickup counter collected");
+                pickup_empty_scans_ = 0;
+                pickup_next_scan_ = Clock::now();
+                return true;
+            }
+        }
+    }
+
+    ++pickup_empty_scans_;
+    self.log("[geiger] pickup objects were unreachable/already collected (" +
+             std::to_string(pickup_empty_scans_) + "/" +
+             std::to_string(empty_scan_limit) + ")");
+    pickup_next_scan_ = Clock::now() + std::chrono::milliseconds(scan_ms);
+    return false;
+}
+
 bool GeigerModule::hop_to_neighbour_tile(adonai::bot::BotContext& self, int seq) {
     const auto& w = self.world();  // std::optional<World>&
     if (!w) return false;
@@ -232,7 +450,7 @@ std::uint32_t GeigerModule::run_deposit(
     adonai::bot::BotContext& self,
     const std::unordered_map<std::uint16_t, std::uint32_t>& plan) {
     if (plan.empty()) return 0;
-    constexpr std::uint64_t kDropPauseMs = 800;  // dialog + inventory-update settle
+    constexpr std::uint64_t kDropPauseMs = 1500;  // dialog + inventory-update settle
     constexpr int kMaxDeadTiles = 4;  // give up if NOTHING drops across this many tiles
     int hop_seq = static_cast<int>(bot_id_);      // vary the first hop direction per bot
     std::uint32_t dropped_stacks = 0;
@@ -248,7 +466,12 @@ std::uint32_t GeigerModule::run_deposit(
             const std::uint32_t before = have;
             self.drop_item(id, have - keep);  // whole excess in one 2-step drop
             self.idle(kDropPauseMs);
-            const std::uint32_t after = inv_amount(self.inventory(), id);
+            std::uint32_t after = inv_amount(self.inventory(), id);
+            if (after >= before) {
+                self.fast_drop(id, have - keep);
+                self.idle(900);
+                after = inv_amount(self.inventory(), id);
+            }
             if (after >= before) {  // nothing left the pack -> tile full / drop refused
                 // If we've never dropped ANYTHING and several tiles all refuse, this
                 // is a NO-DROP world (locked / no build access): bail immediately so
@@ -273,6 +496,7 @@ void GeigerModule::reset_hunt_state() {
     target_history_.clear();
     last_observation_.reset();
     steps_this_hunt_ = 0;
+    no_signal_probes_ = 0;
     // NOTE: last_signal_ts_ is deliberately NOT reset here. It is the fleet-wide
     // "last reading we already consumed" watermark; keeping it across hunts stops
     // a stale Prize particle (which lingers in shared state until a world reload)
@@ -458,10 +682,17 @@ GeigerModule::Point GeigerModule::choose_probe(const std::optional<Obs>& focus) 
 }
 
 bool GeigerModule::detect_prize_fallback(const adonai::world::Inventory& inv,
-                                         std::uint16_t item) const {
+                                          std::uint16_t item) const {
     // Signal-independent: the charged counter was consumed (count dropped) or a
     // dead counter appeared (count rose) -> we just found a prize.
-    return inv_amount(inv, item) < base_charged_ || inv_amount(inv, kDeadGeigerId) > base_dead_;
+    if (inv_amount(inv, item) < base_charged_ || inv_amount(inv, kDeadGeigerId) > base_dead_)
+        return true;
+    for (std::uint16_t id : drop_ids_) {
+        const std::uint32_t before =
+            base_inv_.count(id) ? static_cast<std::uint32_t>(base_inv_.at(id).amount) : 0u;
+        if (inv_amount(inv, id) > before) return true;
+    }
+    return false;
 }
 
 void GeigerModule::build_drop_ids(adonai::bot::BotContext& self,
@@ -613,6 +844,8 @@ void GeigerModule::on_prize(adonai::bot::BotContext& self, adonai::bot::FleetSta
     release_claim(fleet);
     recharge_until_ = Clock::now() + std::chrono::minutes(recharge_min > 0 ? recharge_min : 30);
     pending_deposit_ = true;
+    waiting_for_charge_ = false;
+    signal_refresh_attempts_ = 0;
     reset_hunt_state();  // hard, single-shot terminal transition: this hunt is over
 }
 
@@ -625,29 +858,39 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     // Read the current world FIRST. At the white door (world-select) the engine
     // reports world_name "EXIT" but clears world_ (so in_world() is false) - we
     // must still act there, to re-warp OUT of it.
-    std::string world;
-    if (auto v = fleet.get(bot_id_)) world = upper(v->world_name);
+    std::string world = loaded_world_name(self);
+    if (world.empty())
+        if (auto v = fleet.get(bot_id_)) world = upper(v->world_name);
     const bool at_white_door = (world == "EXIT");
 
     // Truly out of any world (disconnected / mid-login) and NOT at a re-warpable
     // white door -> idle.
     if (!self.in_world() && !at_white_door) {
         release_claim(fleet);
+        release_pickup_claim(fleet);
         world_name_.clear();
         reset_hunt_state();
+        was_offline_ = true;
         return;
+    }
+
+    if (was_offline_) {
+        self.log("[geiger] bot is online again; resuming from fresh world state");
+        was_offline_ = false;
+        last_warp_target_.clear();
+        reset_hunt_state();
     }
 
     if (world != world_name_) {
         release_claim(fleet);
         world_name_ = world;
         reset_hunt_state();  // never search against candidates from a stale world
+        if (at_white_door) last_warp_target_.clear();
     }
     // White-door recovery: a warp that dropped + re-logged to the gateway lands us
     // here. Clear the warp debounce so the sections below re-warp to our objective
     // (hunt/depot/pickup) IMMEDIATELY instead of sitting at the white door - this is
     // how Mori recovers from a failed warp.
-    if (at_white_door) last_warp_target_.clear();
 
     // ---- config (fleet-wide, live) ----
     const auto cfg = fleet.config_snapshot();
@@ -665,6 +908,12 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     const std::uint64_t wait_ms = static_cast<std::uint64_t>(
         std::max(500, atoi_or(cfg.param("geiger_signal_wait_ms", "4200"), 4200)));
     const int max_steps = std::max(1, atoi_or(cfg.param("geiger_max_steps", "70"), 70));
+    const std::uint64_t settle_ms = static_cast<std::uint64_t>(
+        std::max(0, atoi_or(cfg.param("geiger_settle_ms", "700"), 700)));
+    const std::uint64_t pickup_scan_ms = static_cast<std::uint64_t>(
+        std::max(500, atoi_or(cfg.param("geiger_pickup_scan_ms", "3000"), 3000)));
+    const int pickup_empty_limit =
+        std::max(1, atoi_or(cfg.param("geiger_pickup_empty_scans", "12"), 12));
 
     // Resolve the geiger PRIZE ids (deposit drops ONLY these, not the account).
     // Rebuild when items.dat first loads or the geiger_drop_ids override changes.
@@ -677,75 +926,112 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
 
     const auto& inv = self.inventory();
 
+    const auto assigned_hunt = [&]() -> std::optional<std::pair<std::string, std::string>> {
+        if (hunt.empty()) return std::nullopt;
+        return hunt[bot_id_ % hunt.size()];
+    }();
+
     // ---- 1. post-prize radioactive recharge wait (the HARD "stop after a find") ----
     if (Clock::now() < recharge_until_) {
-        // Don't just freeze in place holding the prize: first go DEPOSIT the found
-        // loot at a depot world (like Mori's after_prize depot_drop).
-        if (pending_deposit_ && !depot.empty() && inv.size > 4) {
-            suppress_collect(self);  // don't re-vacuum our own drops at the depot
-            const auto tgt = depot[bot_id_ % depot.size()];
-            if (warp_towards(self, world, tgt)) return;  // multi-tick travel
-            release_claim(fleet);
-            run_deposit(self, build_prize_plan(inv, item));  // drop ALL prizes (blocking)
-            pending_deposit_ = false;  // all dropped -> head home, don't AFK at the depot
-            // fall through: warp back to the assigned hunt world below.
+        if (pending_deposit_) {
+            const auto plan = build_prize_plan(inv, item);
+            if (plan.empty()) {
+                pending_deposit_ = false;
+            } else if (depot.empty()) {
+                self.log("[geiger] prize deposit skipped: no loot depot configured");
+                pending_deposit_ = false;
+            } else {
+                suppress_collect(self);
+                const auto tgt = depot[bot_id_ % depot.size()];
+                if (warp_towards(self, world, tgt)) return;
+                release_claim(fleet);
+                const auto dropped = run_deposit(self, plan);
+                if (dropped == 0)
+                    self.log("[geiger] prize deposit made no progress; returning to hunt");
+                pending_deposit_ = false;
+            }
         }
         release_claim(fleet);
-        // Idle out the rest of the recharge IN THE ASSIGNED HUNT WORLD (Mori returns
-        // to its own world after dropping), NOT standing AFK at the depot. The spent
-        // counter is now a dead counter (2286) that recharges in-game while we idle
-        // here; once it's charged again, section 2 resumes the hunt automatically.
-        // (If loot is still pending but no depot was configured, just idle in place.)
-        if (!pending_deposit_ && !hunt.empty()) {
-            const auto tgt = hunt[bot_id_ % hunt.size()];
-            warp_towards(self, world, tgt);  // go home; the counter recharges here
+        release_pickup_claim(fleet);
+        if (!pending_deposit_ && assigned_hunt) {
+            if (!warp_towards(self, world, *assigned_hunt)) restore_collect(self);
         }
         return;
     }
-    pending_deposit_ = false;  // recharge elapsed; nothing left to deposit-then-idle
+    pending_deposit_ = false;
 
     // ---- 2. ensure we hold a CHARGED Geiger Counter ----
-    if (!inv.has_item(item, 1)) {
+    const std::uint32_t charged_count = inv_amount(inv, item);
+    const std::uint32_t dead_count = inv_amount(inv, kDeadGeigerId);
+    if (charged_count == 0) {
         reset_hunt_state();
-        // A DEAD counter (2286) recharges in-game over time -> WAIT for it in the
-        // hunt world; do NOT go fetch another from the pickup depot (this is Mori's
-        // wait_ready_geiger). Only fetch when we hold NO counter at all.
-        if (inv.has_item(kDeadGeigerId, 1)) {
-            if (!hunt.empty()) {
-                const auto tgt = hunt[bot_id_ % hunt.size()];
-                warp_towards(self, world, tgt);  // idle in the hunt world while it recharges
+        if (dead_count > 0) {
+            waiting_for_charge_ = true;
+            release_pickup_claim(fleet);
+            if (assigned_hunt && !warp_towards(self, world, *assigned_hunt))
+                restore_collect(self);
+            return;
+        }
+
+        waiting_for_charge_ = false;
+        if (!pickup.empty()) {
+            if (Clock::now() < pickup_retry_after_) return;
+            const auto tgt = pickup[(bot_id_ + pickup_target_offset_) % pickup.size()];
+            const std::string pickup_key = "geiger-pickup-depot:" + tgt.first;
+            if (pickup_claim_key_ != pickup_key) release_pickup_claim(fleet);
+            if (!fleet.claim(pickup_key, bot_id_)) return;
+            pickup_claim_key_ = pickup_key;
+            suppress_collect(self);
+            if (warp_towards(self, world, tgt)) return;
+
+            if (try_pickup_counter(self, item, pickup_scan_ms, pickup_empty_limit)) {
+                pickup_empty_scans_ = 0;
+                pickup_target_offset_ = 0;
+                return;  // next tick drops any excess before leaving this depot
+            }
+            if (pickup_empty_scans_ >= pickup_empty_limit) {
+                self.log("[geiger] pickup depot exhausted; trying the next depot shortly");
+                pickup_empty_scans_ = 0;
+                ++pickup_target_offset_;
+                release_pickup_claim(fleet);
+                pickup_retry_after_ = Clock::now() + std::chrono::seconds(5);
             }
             return;
         }
-        if (!pickup.empty()) {
-            const auto tgt = pickup[bot_id_ % pickup.size()];
-            if (warp_towards(self, world, tgt)) return;
-            self.collect();  // pick up a counter someone stocked on the ground
+        release_pickup_claim(fleet);
+        return;
+    }
+
+    if (waiting_for_charge_) {
+        waiting_for_charge_ = false;
+        if (assigned_hunt) {
+            refresh_hunt_world(self, *assigned_hunt, "charged counter ready after recharge");
             return;
         }
-        return;  // no counter anywhere + no pickup world -> can't hunt; idle
     }
-    if (wear && !self.is_item_equipped(item)) self.wear(item);
 
     // ---- 2b. deposit EXCESS geiger counters --------------------------------------
     // A bot should hold exactly ONE counter. Keep the DEAD one if we have it (it is
     // recharging in-game); otherwise keep one charged counter. Everything else is
     // dropped. Mirrors Mori's rotation.dropExcess (e.g. 11 charged + 1 dead -> drop
-    // all 11 charged). Deposit at the DEPOT world (where prizes already drop = the
-    // bot has build access there); the PICKUP world is often locked (geiger-alinacak)
-    // so dropping there fails ("Cant place tile" spam -> kick to the white door).
+    // all 11 charged). Prefer the dedicated pickup/geiger depot so prize storage
+    // remains separate; fall back to the loot depot only when no pickup world exists.
     // Only run in a REAL world (never at the white door -> section 4 warps us back
     // to hunt = the recovery). If depositing keeps failing, back off 5 min and hunt
     // with the extras rather than looping forever.
     {
         const std::uint32_t plain_cnt = inv_amount(inv, item);
         const std::uint32_t dead_cnt = inv_amount(inv, kDeadGeigerId);
-        const auto& drop_worlds = !depot.empty() ? depot : pickup;
+        const auto& drop_worlds = !pickup.empty() ? pickup : depot;
         if (self.in_world() && !drop_worlds.empty() && plain_cnt + dead_cnt > 1 &&
             Clock::now() >= counter_deposit_off_until_) {
             reset_hunt_state();
-            suppress_collect(self);  // don't re-vacuum the counters we just dropped
             const auto tgt = drop_worlds[bot_id_ % drop_worlds.size()];
+            const std::string pickup_key = "geiger-pickup-depot:" + tgt.first;
+            if (pickup_claim_key_ != pickup_key) release_pickup_claim(fleet);
+            if (!fleet.claim(pickup_key, bot_id_)) return;
+            pickup_claim_key_ = pickup_key;
+            suppress_collect(self);
             if (warp_towards(self, world, tgt)) return;  // multi-tick travel
             release_claim(fleet);
             std::unordered_map<std::uint16_t, std::uint32_t> plan;
@@ -756,7 +1042,7 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
                 plan[item] = 1;                       // no dead -> keep one charged
             }
             const std::uint32_t dropped = run_deposit(self, plan);
-            restore_collect(self);
+            release_pickup_claim(fleet);
             if (dropped == 0) {
                 // Couldn't drop here (no build access / world unreachable). Don't loop
                 // forever: after a few dead episodes, skip for 5 min and just hunt.
@@ -772,6 +1058,7 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
             return;  // re-evaluate next tick (now holding exactly one counter)
         }
     }
+    release_pickup_claim(fleet);
 
     // Do we hold any PRIZE item worth a deposit run? (Prevents a full pack of
     // non-prize account items from looping the deposit forever.)
@@ -812,6 +1099,17 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     // Back in the hunt world -> restore the user's auto-collect value (forced off
     // during the deposit).
     restore_collect(self);
+
+    if (wear && !self.is_item_equipped(item)) {
+        self.log("[geiger] wear charged Geiger Counter");
+        self.wear(item);
+        self.idle(700);
+        if (!self.is_item_equipped(item)) {
+            self.log("[geiger] wear verification failed; hunt postponed");
+            reset_hunt_state();
+            return;
+        }
+    }
 
     // ---- 5. CANDIDATE-ELIMINATION SEARCH -----------------------------------
     // 5a. start a fresh hunt: full candidate grid over the REAL world bounds
@@ -879,8 +1177,44 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     std::uint64_t baseline = last_signal_ts_;
     if (auto cur = self.geiger_signal())
         baseline = std::max<std::uint64_t>(baseline, cur->timestamp_ms);
+
+    const std::string measurement_world = loaded_world_name(self);
+    const auto start_x = adonai::world::pixel_to_tile(self.pos_x());
+    const auto start_y = adonai::world::pixel_to_tile(self.pos_y());
+    if (start_x != target.x || start_y != target.y) {
+        const auto path = self.compute_path(target.x, target.y);
+        if (path.empty()) {
+            self.log("[geiger] probe unreachable at " + std::to_string(target.x) + ":" +
+                     std::to_string(target.y) + "; observation ignored");
+            target_history_[(static_cast<std::uint32_t>(target.x) << 16) | target.y] += 3;
+            release_claim(fleet);
+            return;
+        }
+    }
     self.find_path(target.x, target.y);  // blocking walk to the tile (keeps ENet serviced)
+    if (!self.in_world() || loaded_world_name(self) != measurement_world) {
+        self.log("[geiger] probe interrupted by reconnect/world change; observation ignored");
+        release_claim(fleet);
+        reset_hunt_state();
+        return;
+    }
+    const auto reached_x = adonai::world::pixel_to_tile(self.pos_x());
+    const auto reached_y = adonai::world::pixel_to_tile(self.pos_y());
+    if (reached_x != target.x || reached_y != target.y) {
+        self.log("[geiger] movement did not reach " + std::to_string(target.x) + ":" +
+                 std::to_string(target.y) + "; observation ignored");
+        target_history_[(static_cast<std::uint32_t>(target.x) << 16) | target.y] += 3;
+        release_claim(fleet);
+        return;
+    }
     ++steps_this_hunt_;
+    if (settle_ms > 0) self.idle(settle_ms);
+    if (!self.in_world() || loaded_world_name(self) != measurement_world) {
+        self.log("[geiger] probe settle interrupted; observation ignored");
+        release_claim(fleet);
+        reset_hunt_state();
+        return;
+    }
     (void)dig;
 
     Obs obs{std::nullopt, target.x, target.y};
@@ -908,6 +1242,13 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
         if (!close && fresh) break;  // far: one reading is enough -> move on fast
     }
 
+    if (!self.in_world() || loaded_world_name(self) != measurement_world) {
+        self.log("[geiger] signal wait interrupted by reconnect; observation ignored");
+        release_claim(fleet);
+        reset_hunt_state();
+        return;
+    }
+
     // No-signal recovery: if the geiger emits NO particle for several probes, the
     // counter almost certainly isn't active (or we're mis-equipped) - blindly
     // probing the grid centroid is exactly the "stuck at ~centre" symptom. Forget
@@ -915,11 +1256,23 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     // the hunt. Mirrors Mori's no_signal_steps recovery.
     if (obs.area.has_value()) {
         no_signal_probes_ = 0;
-    } else if (++no_signal_probes_ >= 3) {
-        no_signal_probes_ = 0;
+        signal_refresh_attempts_ = 0;
+    } else if (++no_signal_probes_ >= (signal_refresh_attempts_ == 0 ? 2 : 3)) {
         release_claim(fleet);
-        self.mark_item_equipped(item, false);  // -> is_item_equipped false -> re-wear
-        reset_hunt_state();
+        if (assigned_hunt) {
+            if (signal_refresh_attempts_ == 0) {
+                ++signal_refresh_attempts_;
+                refresh_hunt_world(self, *assigned_hunt,
+                                   "no geiger particles; refreshing hunt session");
+            } else {
+                ++signal_refresh_attempts_;
+                self.mark_item_equipped(item, false);
+                refresh_hunt_world(self, *assigned_hunt,
+                                   "still no particles; retrying a verified wear");
+            }
+        } else {
+            reset_hunt_state();
+        }
         return;
     }
 

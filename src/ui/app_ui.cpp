@@ -959,6 +959,11 @@ void AppUi::DrawAutomationSection() {
         geiger_wear_ = cfg.param("geiger_wear", "1") != "0";
         try { geiger_item_ = std::stoi(cfg.param("geiger_item", "2204")); } catch (...) { geiger_item_ = 2204; }
         try { geiger_recharge_min_ = std::stoi(cfg.param("geiger_recharge_min", "30")); } catch (...) { geiger_recharge_min_ = 30; }
+        try { geiger_signal_wait_ms_ = std::stoi(cfg.param("geiger_signal_wait_ms", "4200")); } catch (...) { geiger_signal_wait_ms_ = 4200; }
+        try { geiger_settle_ms_ = std::stoi(cfg.param("geiger_settle_ms", "700")); } catch (...) { geiger_settle_ms_ = 700; }
+        try { geiger_max_steps_ = std::stoi(cfg.param("geiger_max_steps", "70")); } catch (...) { geiger_max_steps_ = 70; }
+        try { geiger_pickup_scan_ms_ = std::stoi(cfg.param("geiger_pickup_scan_ms", "3000")); } catch (...) { geiger_pickup_scan_ms_ = 3000; }
+        try { geiger_pickup_empty_scans_ = std::stoi(cfg.param("geiger_pickup_empty_scans", "12")); } catch (...) { geiger_pickup_empty_scans_ = 12; }
         auto_params_loaded_ = true;
     }
 
@@ -1023,6 +1028,41 @@ void AppUi::DrawAutomationSection() {
         ImGui::SameLine();
         if (ImGui::Checkbox("Hedef tile'i kaz (dig)", &auto_geiger_dig_)) {
             cfg.params["geiger_dig"] = auto_geiger_dig_ ? "1" : "0";
+            changed = true;
+        }
+        ImGui::SeparatorText("Arama ve pickup zamanlamasi");
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputInt("Signal wait (ms)", &geiger_signal_wait_ms_, 0)) {
+            geiger_signal_wait_ms_ = std::max(500, geiger_signal_wait_ms_);
+            cfg.params["geiger_signal_wait_ms"] = std::to_string(geiger_signal_wait_ms_);
+            changed = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        if (ImGui::InputInt("Settle (ms)", &geiger_settle_ms_, 0)) {
+            geiger_settle_ms_ = std::max(0, geiger_settle_ms_);
+            cfg.params["geiger_settle_ms"] = std::to_string(geiger_settle_ms_);
+            changed = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80.0f);
+        if (ImGui::InputInt("Max steps", &geiger_max_steps_, 0)) {
+            geiger_max_steps_ = std::max(1, geiger_max_steps_);
+            cfg.params["geiger_max_steps"] = std::to_string(geiger_max_steps_);
+            changed = true;
+        }
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputInt("Pickup scan (ms)", &geiger_pickup_scan_ms_, 0)) {
+            geiger_pickup_scan_ms_ = std::max(500, geiger_pickup_scan_ms_);
+            cfg.params["geiger_pickup_scan_ms"] = std::to_string(geiger_pickup_scan_ms_);
+            changed = true;
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.0f);
+        if (ImGui::InputInt("Bos scan limiti", &geiger_pickup_empty_scans_, 0)) {
+            geiger_pickup_empty_scans_ = std::max(1, geiger_pickup_empty_scans_);
+            cfg.params["geiger_pickup_empty_scans"] =
+                std::to_string(geiger_pickup_empty_scans_);
             changed = true;
         }
         ImGui::TextUnformatted("Depoya SADECE prize itemleri birakilir (dahili liste).");

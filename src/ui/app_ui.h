@@ -108,6 +108,11 @@ private:
     std::array<char, 512> geiger_drop_ids_{};     // geiger_drop_ids (extra prize ids to drop)
     int geiger_item_ = 2204;                 // geiger_item
     int geiger_recharge_min_ = 30;           // geiger_recharge_min
+    int geiger_signal_wait_ms_ = 4200;       // geiger_signal_wait_ms
+    int geiger_settle_ms_ = 700;             // geiger_settle_ms
+    int geiger_max_steps_ = 70;               // geiger_max_steps
+    int geiger_pickup_scan_ms_ = 3000;        // geiger_pickup_scan_ms
+    int geiger_pickup_empty_scans_ = 12;      // geiger_pickup_empty_scans
     bool geiger_wear_ = true;                // geiger_wear
     // Executor: which bots AutoGeiger is armed on (multi-select; Ctrl+click). This
     // is the pending UI selection — committed to cfg.module_bot_ids["geiger"] only

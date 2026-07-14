@@ -131,7 +131,10 @@ json supported_automation_json() {
                   {"geiger_max_y", "Search grid maximum Y. Default 53."},
                   {"geiger_world_width", "Search grid width cap. Default 100."},
                   {"geiger_signal_wait_ms", "Milliseconds to wait for a fresh geiger particle per probe. Default 4200."},
+                  {"geiger_settle_ms", "Milliseconds to settle on a probe tile before measuring. Default 700."},
                   {"geiger_max_steps", "Maximum probe steps per hunt. Default 70."},
+                  {"geiger_pickup_scan_ms", "Pickup depot rescan interval in milliseconds. Default 3000."},
+                  {"geiger_pickup_empty_scans", "Empty scans before rotating to another pickup depot. Default 12."},
                   {"geiger_webhook_url", "Optional Discord webhook URL for geiger fleet logs."},
               }},
              {"collect", {{"collect_radius", "Pickup radius in tiles, clamped 1..5. Default 3."}}},
@@ -1157,7 +1160,10 @@ json McpServer::call_tool(const std::string& name, const json& args) {
             set_int_param_if_present(cfg, args, "max_y", "geiger_max_y", 1, 200);
             set_int_param_if_present(cfg, args, "world_width", "geiger_world_width", 4, 300);
             set_int_param_if_present(cfg, args, "signal_wait_ms", "geiger_signal_wait_ms", 500, 60000);
+            set_int_param_if_present(cfg, args, "settle_ms", "geiger_settle_ms", 0, 10000);
             set_int_param_if_present(cfg, args, "max_steps", "geiger_max_steps", 1, 1000);
+            set_int_param_if_present(cfg, args, "pickup_scan_ms", "geiger_pickup_scan_ms", 500, 60000);
+            set_int_param_if_present(cfg, args, "pickup_empty_scans", "geiger_pickup_empty_scans", 1, 1000);
 
             const int min_y = std::stoi(cfg.param("geiger_min_y", "0"));
             const int max_y = std::stoi(cfg.param("geiger_max_y", "53"));
