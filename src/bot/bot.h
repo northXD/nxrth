@@ -107,6 +107,8 @@ using BotContext = Bot;
 struct AutomationModule {
     virtual ~AutomationModule() = default;
     virtual const char* name() const = 0;
+    virtual void on_enabled(BotContext&, FleetState&) {}
+    virtual void on_disabled(BotContext&, FleetState&) {}
     virtual void tick(BotContext& self, FleetState& fleet) = 0;
 };
 
@@ -380,6 +382,7 @@ private:
     std::shared_ptr<std::atomic<bool>> script_stop_ =
         std::make_shared<std::atomic<bool>>(false);            // 66 automation interrupt
     std::vector<std::unique_ptr<AutomationModule>> automation_modules_;
+    std::unordered_map<std::string, bool> automation_module_enabled_;
     FleetHandle fleet_;                          // shared fleet registry
     std::optional<std::chrono::steady_clock::time_point> reconnect_after_;  // 67
     bool pending_2fa_ = false;                  // 68

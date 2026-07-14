@@ -1048,7 +1048,13 @@ void Bot::run_automation(FleetState& fleet) {
     if (automation_modules_.empty()) return;
     AutomationConfig cfg = fleet.config_snapshot();
     for (auto& mod : automation_modules_) {
-        if (cfg.is_on_for(mod->name(), bot_id_)) mod->tick(*this, fleet);
+        const std::string module_name = mod->name();
+        const bool enabled = cfg.is_on_for(module_name, bot_id_);
+        const bool was_enabled = automation_module_enabled_[module_name];
+        if (enabled && !was_enabled) mod->on_enabled(*this, fleet);
+        if (!enabled && was_enabled) mod->on_disabled(*this, fleet);
+        automation_module_enabled_[module_name] = enabled;
+        if (enabled) mod->tick(*this, fleet);
     }
 }
 

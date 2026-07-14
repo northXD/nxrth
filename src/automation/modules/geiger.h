@@ -65,6 +65,10 @@ public:
     static constexpr const char* kName = "geiger";
 
     const char* name() const override { return kName; }
+    void on_enabled(adonai::bot::BotContext& self,
+                    adonai::bot::FleetState& fleet) override;
+    void on_disabled(adonai::bot::BotContext& self,
+                     adonai::bot::FleetState& fleet) override;
     void tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) override;
 
 private:
@@ -176,6 +180,9 @@ private:
     int pickup_empty_scans_ = 0;
     Clock::time_point pickup_next_scan_{};
     Clock::time_point pickup_retry_after_{};
+    std::string pickup_worlds_param_;
+    std::uint32_t logged_extra_charged_ = 0;
+    std::uint32_t logged_extra_dead_ = 0;
     int counter_deposit_fails_ = 0;                 // consecutive zero-progress counter deposits
     Clock::time_point counter_deposit_off_until_{};  // skip the excess-counter deposit until this time
     std::unordered_set<std::uint16_t> drop_ids_;          // geiger PRIZE ids (the only ones to drop)

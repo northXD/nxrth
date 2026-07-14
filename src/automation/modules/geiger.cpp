@@ -193,6 +193,36 @@ void GeigerModule::release_pickup_claim(adonai::bot::FleetState& fleet) {
     }
 }
 
+void GeigerModule::on_enabled(adonai::bot::BotContext& self,
+                              adonai::bot::FleetState& fleet) {
+    bot_id_ = self.bot_id();
+    release_claim(fleet);
+    release_pickup_claim(fleet);
+    restore_collect(self);
+    counter_deposit_fails_ = 0;
+    counter_deposit_off_until_ = {};
+    pickup_retry_after_ = {};
+    pickup_next_scan_ = {};
+    pickup_empty_scans_ = 0;
+    door_retry_count_ = 0;
+    door_retry_target_.clear();
+    last_warp_target_.clear();
+    logged_extra_charged_ = 0;
+    logged_extra_dead_ = 0;
+    reset_hunt_state();
+    self.log("[geiger] automation enabled; runtime cooldowns and depot claims reset");
+}
+
+void GeigerModule::on_disabled(adonai::bot::BotContext& self,
+                               adonai::bot::FleetState& fleet) {
+    bot_id_ = self.bot_id();
+    release_claim(fleet);
+    release_pickup_claim(fleet);
+    restore_collect(self);
+    reset_hunt_state();
+    self.log("[geiger] automation disabled; depot claims released and auto collect restored");
+}
+
 GeigerModule::DoorCheck GeigerModule::check_target_door(
     adonai::bot::BotContext& self,
     const std::pair<std::string, std::string>& target) const {
@@ -896,7 +926,21 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     const auto cfg = fleet.config_snapshot();
     const auto hunt = parse_worlds(cfg.param("geiger_hunt_worlds", ""));
     const auto depot = parse_worlds(cfg.param("geiger_depot_worlds", ""));
-    const auto pickup = parse_worlds(cfg.param("geiger_pickup_worlds", ""));
+    const std::string pickup_param = cfg.param("geiger_pickup_worlds", "");
+    const auto pickup = parse_worlds(pickup_param);
+    if (pickup_param != pickup_worlds_param_) {
+        const bool was_configured = !pickup_worlds_param_.empty();
+        release_pickup_claim(fleet);
+        pickup_worlds_param_ = pickup_param;
+        pickup_target_offset_ = 0;
+        pickup_empty_scans_ = 0;
+        pickup_retry_after_ = {};
+        pickup_next_scan_ = {};
+        counter_deposit_fails_ = 0;
+        counter_deposit_off_until_ = {};
+        if (was_configured)
+            self.log("[geiger] pickup/geiger depot config changed; cleanup cooldown reset");
+    }
     const std::uint16_t item =
         static_cast<std::uint16_t>(atoi_or(cfg.param("geiger_item", "2204"), 2204));
     const bool wear = cfg.param("geiger_wear", "1") != "0";
@@ -930,6 +974,65 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
         if (hunt.empty()) return std::nullopt;
         return hunt[bot_id_ % hunt.size()];
     }();
+
+    // Counter count is an inventory invariant, independent of irradiated/recharge
+    // state. Clean it before every other gate so 0 charged + N dead and an active
+    // post-prize timer cannot strand excess counters in the inventory.
+    {
+        const std::uint32_t plain_cnt = inv_amount(inv, item);
+        const std::uint32_t dead_cnt = inv_amount(inv, kDeadGeigerId);
+        const auto& drop_worlds = pickup;
+        if (plain_cnt + dead_cnt > 1 &&
+            (plain_cnt != logged_extra_charged_ || dead_cnt != logged_extra_dead_)) {
+            self.log("[geiger] extra counters detected: charged=" + std::to_string(plain_cnt) +
+                     " dead=" + std::to_string(dead_cnt) + " pickup_depots=" +
+                     std::to_string(drop_worlds.size()));
+            logged_extra_charged_ = plain_cnt;
+            logged_extra_dead_ = dead_cnt;
+        } else if (plain_cnt + dead_cnt <= 1) {
+            logged_extra_charged_ = 0;
+            logged_extra_dead_ = 0;
+        }
+        if (plain_cnt + dead_cnt > 1 && drop_worlds.empty() &&
+            Clock::now() >= counter_deposit_off_until_) {
+            self.log("[geiger] extra counters kept: no pickup/geiger depot configured; "
+                     "loot depot will not be used");
+            counter_deposit_off_until_ = Clock::now() + std::chrono::minutes(5);
+        }
+        if (self.in_world() && !drop_worlds.empty() && plain_cnt + dead_cnt > 1 &&
+            Clock::now() >= counter_deposit_off_until_) {
+            reset_hunt_state();
+            const auto tgt = drop_worlds[bot_id_ % drop_worlds.size()];
+            const std::string pickup_key = "geiger-pickup-depot:" + tgt.first;
+            if (pickup_claim_key_ != pickup_key) release_pickup_claim(fleet);
+            if (!fleet.claim(pickup_key, bot_id_)) return;
+            pickup_claim_key_ = pickup_key;
+            suppress_collect(self);
+            if (warp_towards(self, world, tgt)) return;
+            release_claim(fleet);
+            std::unordered_map<std::uint16_t, std::uint32_t> plan;
+            if (dead_cnt >= 1) {
+                plan[kDeadGeigerId] = 1;
+                if (plain_cnt > 0) plan[item] = 0;
+            } else {
+                plan[item] = 1;
+            }
+            const std::uint32_t dropped = run_deposit(self, plan);
+            release_pickup_claim(fleet);
+            if (dropped == 0) {
+                if (++counter_deposit_fails_ >= 3) {
+                    counter_deposit_fails_ = 0;
+                    counter_deposit_off_until_ = Clock::now() + std::chrono::minutes(5);
+                    self.log("[geiger] excess-counter deposit failed (no drop access at the "
+                             "pickup depot?) - skipping cleanup for 5 min");
+                }
+            } else {
+                counter_deposit_fails_ = 0;
+            }
+            return;
+        }
+    }
+    release_pickup_claim(fleet);
 
     // ---- 1. post-prize radioactive recharge wait (the HARD "stop after a find") ----
     if (Clock::now() < recharge_until_) {
@@ -1009,62 +1112,6 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
             return;
         }
     }
-
-    // ---- 2b. deposit EXCESS geiger counters --------------------------------------
-    // A bot should hold exactly ONE counter. Keep the DEAD one if we have it (it is
-    // recharging in-game); otherwise keep one charged counter. Everything else is
-    // dropped. Mirrors Mori's rotation.dropExcess (e.g. 11 charged + 1 dead -> drop
-    // all 11 charged). Counter cleanup uses ONLY the dedicated pickup/geiger depot;
-    // prize storage must never receive counters.
-    // Only run in a REAL world (never at the white door -> section 4 warps us back
-    // to hunt = the recovery). If depositing keeps failing, back off 5 min and hunt
-    // with the extras rather than looping forever.
-    {
-        const std::uint32_t plain_cnt = inv_amount(inv, item);
-        const std::uint32_t dead_cnt = inv_amount(inv, kDeadGeigerId);
-        const auto& drop_worlds = pickup;
-        if (plain_cnt + dead_cnt > 1 && drop_worlds.empty() &&
-            Clock::now() >= counter_deposit_off_until_) {
-            self.log("[geiger] extra counters kept: no pickup/geiger depot configured; "
-                     "loot depot will not be used");
-            counter_deposit_off_until_ = Clock::now() + std::chrono::minutes(5);
-        }
-        if (self.in_world() && !drop_worlds.empty() && plain_cnt + dead_cnt > 1 &&
-            Clock::now() >= counter_deposit_off_until_) {
-            reset_hunt_state();
-            const auto tgt = drop_worlds[bot_id_ % drop_worlds.size()];
-            const std::string pickup_key = "geiger-pickup-depot:" + tgt.first;
-            if (pickup_claim_key_ != pickup_key) release_pickup_claim(fleet);
-            if (!fleet.claim(pickup_key, bot_id_)) return;
-            pickup_claim_key_ = pickup_key;
-            suppress_collect(self);
-            if (warp_towards(self, world, tgt)) return;  // multi-tick travel
-            release_claim(fleet);
-            std::unordered_map<std::uint16_t, std::uint32_t> plan;
-            if (dead_cnt >= 1) {
-                plan[kDeadGeigerId] = 1;              // keep one dead counter (recharging)
-                if (plain_cnt > 0) plan[item] = 0;    // drop ALL charged counters
-            } else {
-                plan[item] = 1;                       // no dead -> keep one charged
-            }
-            const std::uint32_t dropped = run_deposit(self, plan);
-            release_pickup_claim(fleet);
-            if (dropped == 0) {
-                // Couldn't drop here (no build access / world unreachable). Don't loop
-                // forever: after a few dead episodes, skip for 5 min and just hunt.
-                if (++counter_deposit_fails_ >= 3) {
-                    counter_deposit_fails_ = 0;
-                    counter_deposit_off_until_ = Clock::now() + std::chrono::minutes(5);
-                    self.log("[geiger] excess-counter deposit failed (no drop access at the "
-                             "depot?) - skipping 5 min, hunting with the extra counters");
-                }
-            } else {
-                counter_deposit_fails_ = 0;
-            }
-            return;  // re-evaluate next tick (now holding exactly one counter)
-        }
-    }
-    release_pickup_claim(fleet);
 
     // Do we hold any PRIZE item worth a deposit run? (Prevents a full pack of
     // non-prize account items from looping the deposit forever.)
