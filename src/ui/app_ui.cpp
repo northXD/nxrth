@@ -502,9 +502,12 @@ void AppUi::DrawTitleBar() {
     if (dx1 < dx0 + 4.0f) dx1 = dx0 + 4.0f;
     ImGui::SetCursorPos(ImVec2(dx0, 0.0f));
     ImGui::InvisibleButton("##drag", ImVec2(dx1 - dx0, kH));
-    if (ImGui::IsItemActive() && !host_.is_locked()) {
-        const ImVec2 d = ImGui::GetIO().MouseDelta;
-        host_.drag_by(d.x, d.y);
+    // Anchor the drag to the absolute screen cursor: capture the offset on grab,
+    // then track it. Moving by ImGui's per-frame (client-relative) MouseDelta made
+    // the window jitter, because the window slid out from under the cursor.
+    if (!host_.is_locked()) {
+        if (ImGui::IsItemActivated()) host_.begin_drag();
+        if (ImGui::IsItemActive()) host_.drag_update();
     }
 
     ImGui::EndChild();
@@ -2989,6 +2992,14 @@ void AppUi::DrawSettingsSection() {
     if (ImGui::Checkbox("Always on top", &aot)) host_.set_always_on_top(aot);
     bool lk = host_.is_locked();
     if (ImGui::Checkbox("Window lock (drag disabled)", &lk)) host_.set_locked(lk);
+
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderInt("FPS limit", &target_fps_, 15, 144);
+    if (target_fps_ < 5) target_fps_ = 5;
+    if (target_fps_ > 240) target_fps_ = 240;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(UI refresh cap; default 30)");
 
     ImGui::Spacing();
     ImGui::Separator();

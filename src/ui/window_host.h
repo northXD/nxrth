@@ -8,7 +8,7 @@ class IWindowHost {
 public:
     virtual ~IWindowHost() = default;
 
-    // LOCKED mode: while true the window position is pinned — drag_by() is a no-op.
+    // LOCKED mode: while true the window position is pinned — dragging is a no-op.
     virtual bool is_locked() const = 0;
     virtual void set_locked(bool v) = 0;
 
@@ -19,9 +19,13 @@ public:
     virtual void minimize() = 0;
     virtual void request_close() = 0;
 
-    // Move the window by (dx,dy) pixels — called each frame while the custom title
-    // bar is dragged. No-op when locked.
-    virtual void drag_by(float dx, float dy) = 0;
+    // Window drag, anchored to the ABSOLUTE screen cursor so it never jitters:
+    // begin_drag() records the window + screen-cursor position at grab time, then
+    // drag_update() each frame sets the window to anchor + (cursor_now - cursor_at_grab).
+    // (Moving by per-frame client-relative deltas oscillates: the window slides out
+    // from under the cursor and the next delta reverses it.) No-op when locked.
+    virtual void begin_drag() = 0;
+    virtual void drag_update() = 0;
 };
 
 }  // namespace nxrth::ui

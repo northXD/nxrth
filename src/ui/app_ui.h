@@ -46,6 +46,10 @@ public:
     // Called once per frame between ImGui::NewFrame() and ImGui::Render().
     void Draw();
 
+    // UI frame-rate cap (frames/sec) the main loop paces itself to. Adjustable
+    // from the Settings tab; default 30.
+    int target_fps() const { return target_fps_; }
+
 private:
     // --- chrome -------------------------------------------------------------
     void DrawTitleBar();   // centered title + dropdown + red move/lock/min/close
@@ -106,6 +110,7 @@ private:
     std::unique_ptr<nxrth::mcp::McpServer> ai_mcp_;
     std::unique_ptr<nxrth::ai::AiController> ai_controller_;
 
+    int target_fps_ = 30;    // Settings: UI frame-rate cap (main loop paces to this)
     int section_ = 0;        // active top tab (0 Bots .. 6 AI)
     int selected_bot_ = -1;  // BotInfo.id of the focused bot, or -1
     std::vector<nxrth::bot::BotInfo> bot_list_cache_;

@@ -46,17 +46,28 @@ public:
     }
     void minimize() override { glfwIconifyWindow(w_); }
     void request_close() override { glfwSetWindowShouldClose(w_, GLFW_TRUE); }
-    void drag_by(float dx, float dy) override {
-        if (locked_ || (dx == 0.0f && dy == 0.0f)) return;
-        int x = 0, y = 0;
-        glfwGetWindowPos(w_, &x, &y);
-        glfwSetWindowPos(w_, x + static_cast<int>(dx), y + static_cast<int>(dy));
+    void begin_drag() override {
+        if (locked_) return;
+        POINT p{};
+        ::GetCursorPos(&p);
+        grab_cursor_x_ = p.x;
+        grab_cursor_y_ = p.y;
+        glfwGetWindowPos(w_, &grab_win_x_, &grab_win_y_);
+    }
+    void drag_update() override {
+        if (locked_) return;
+        POINT p{};
+        ::GetCursorPos(&p);  // absolute screen coords — independent of the window
+        glfwSetWindowPos(w_, grab_win_x_ + (p.x - grab_cursor_x_),
+                         grab_win_y_ + (p.y - grab_cursor_y_));
     }
 
 private:
     GLFWwindow* w_;
     bool locked_ = false;
     bool floating_ = false;
+    long grab_cursor_x_ = 0, grab_cursor_y_ = 0;  // screen cursor at grab
+    int grab_win_x_ = 0, grab_win_y_ = 0;         // window pos at grab
 };
 
 // In-process event sink: bots push console lines here; forward to the shared
@@ -235,8 +246,11 @@ int main(int argc, char** argv) {
     while (!glfwWindowShouldClose(window)) {
         const auto now = UiClock::now();
         const bool minimized = glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE;
+        int fps = app.target_fps();  // Settings-adjustable UI cap (default 30)
+        if (fps < 5) fps = 5;
+        if (fps > 240) fps = 240;
         const auto frame_interval = minimized ? std::chrono::milliseconds(200)
-                                              : std::chrono::milliseconds(33);
+                                              : std::chrono::milliseconds(1000 / fps);
         if (now < next_ui_frame) {
             const std::chrono::duration<double> remaining = next_ui_frame - now;
             glfwWaitEventsTimeout(remaining.count());

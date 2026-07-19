@@ -263,7 +263,7 @@ std::vector<BotInfo> BotManager::list() {
     for (auto& [id, entry] : bots) {
         BotInfo info;
         info.id = id;
-        info.username = entry.username;  // BotEntry.username, NOT BotState.username
+        info.username = entry.username;  // BotEntry.username (empty for token/ltoken bots)
         info.proxy_key = entry.proxy_key;  // resolved game-proxy "ip:port" (MCP correlation)
         if (entry.state) {
             entry.state->read([&](const BotState& s) {
@@ -273,6 +273,10 @@ std::vector<BotInfo> BotManager::list() {
                 info.pos_y = s.pos_y;
                 info.gems = s.gems;
                 info.ping_ms = s.ping_ms;
+                // Token/ltoken bots have no entry username; once logged in the
+                // server sends the account's GrowID (SetHasGrowID -> s.username),
+                // so surface that as the display name instead of "(token)".
+                if (info.username.empty()) info.username = s.username;
                 return 0;
             });
         }
