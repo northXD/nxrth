@@ -56,6 +56,19 @@ Manifest mode installs the dependencies (Dear ImGui, libcurl, Lua, nlohmann-json
 Run the app from the project root so it finds `data/`. Provide your own
 `data/items.dat` (a Growtopia item database) for item names and the Database tab.
 
+### Open in Visual Studio
+
+The solution lives at [`vs/Nxrth.sln`](vs/Nxrth.sln). The per-machine project
+files carry local absolute paths, so they are generated (not committed) — run
+this once, then open the `.sln`:
+
+```bat
+scripts\generate-vs.bat
+```
+
+(You can also just **File > Open > Folder** the repo root — VS reads
+`CMakePresets.json` directly.)
+
 ## Extras
 
 - **`NxrthMcp.exe`** — a stdio MCP server exposing the same fleet to external agents (see `docs/MCP.md`).

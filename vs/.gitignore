@@ -1,0 +1,6 @@
+# Only the hand-written solution is tracked here. The Visual Studio project
+# files are generated per-machine by scripts/generate-vs.bat (they carry local
+# absolute source/vcpkg paths), so everything else in this folder is ignored.
+*
+!.gitignore
+!Nxrth.sln
