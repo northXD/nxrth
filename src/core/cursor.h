@@ -1,4 +1,4 @@
-// Adonai — little-endian, bounds-checked byte reader.
+// Nxrth — little-endian, bounds-checked byte reader.
 // Every binary parser (items.dat, save.dat, inventory, VariantList) is driven
 // by this cursor. Ported from Mori/cursor.rs. GT is little-endian throughout.
 #pragma once
@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace adonai {
+namespace nxrth {
 
 // A borrowed (non-owning) sequential reader over a byte buffer. On any read that
 // would run past the end it throws std::runtime_error with the verbatim message:
@@ -57,4 +57,4 @@ private:
     const char* label_;
 };
 
-}  // namespace adonai
+}  // namespace nxrth

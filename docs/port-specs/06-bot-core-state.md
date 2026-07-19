@@ -1,12 +1,12 @@
 # Port Spec 06 — Bot Core & State (`bot/core.rs`, lines ~1–1760 + gate/const helpers)
 
-Single source of truth for the C++ (Adonai) port of the Mori `Bot` core: the `Bot` struct,
+Single source of truth for the C++ (Nxrth) port of the Mori `Bot` core: the `Bot` struct,
 its constructors, the ENet host wrapper, the run/service loop, connect/reconnect/refresh flow,
 and the fleet-wide "stagger gate" throttling system. An engineer must be able to reimplement
 this module in C++ **without reading the Rust**.
 
 > RENAME NOTE (applies to the whole spec): all identifiers/strings below are shown in their
-> original Mori form. When porting, apply the rename rules in §5 (Mori→Adonai, Cloei→North).
+> original Mori form. When porting, apply the rename rules in §5 (Mori→Nxrth, Cloei→North).
 > This module contains exactly **one** literal `Mori` occurrence (line 167 doc comment); there
 > are **no** `Cloei` occurrences here.
 
@@ -15,7 +15,7 @@ this module in C++ **without reading the Rust**.
 ## 0. Source-of-truth constants (from `src/constants.rs`)
 
 These are consumed all over this module (login packet, `default_klv`, `LoginInfo`). Copy them
-verbatim into an Adonai `constants.h`. GT is **little-endian**.
+verbatim into an Nxrth `constants.h`. GT is **little-endian**.
 
 | Name | Type | Value |
 |---|---|---|
@@ -205,7 +205,7 @@ internal. Port all fields; C++ types shown in the right column.
 | 63 | `event_tx` | `Option<crossbeam_channel::Sender<BotEventRaw>>` | | queue sender | Forwards events to script thread (None = no script). |
 | 64 | `script_req_rx` | `Option<crossbeam_channel::Receiver<ScriptRequest>>` | | queue receiver | Requests from script thread. |
 | 65 | `script_reply_tx` | `Option<crossbeam_channel::Sender<ScriptReply>>` | | queue sender | Replies to script thread. |
-| 66 | `script_stop` | `Arc<AtomicBool>` | pub | `shared_ptr<atomic<bool>>` | Interrupts a running script. **In Adonai there is NO Lua** — see §3. |
+| 66 | `script_stop` | `Arc<AtomicBool>` | pub | `shared_ptr<atomic<bool>>` | Interrupts a running script. **In Nxrth there is NO Lua** — see §3. |
 | 67 | `reconnect_after` | `Option<Instant>` | | `std::optional<steady_clock::time_point>` | Delay reconnect until this instant (cooldowns). |
 | 68 | `pending_2fa` | `bool` | | `bool` | "Advanced Account Protection" seen → next logon_fail applies 2FA cooldown. |
 | 69 | `pending_relogon` | `bool` | | `bool` | "Server requesting that you re-logon" seen. |
@@ -217,7 +217,7 @@ internal. Port all fields; C++ types shown in the right column.
 | 75 | `pending_maintenance` | `bool` | | `bool` | "undergoing maintenance" seen. |
 | 76 | `stop_requested` | `bool` | | `bool` | Makes run loop exit next iteration. |
 | 77 | `bot_id` | `u32` | pub | `uint32_t` | ID in BotManager; tags WS/UI events & log lines. |
-| 78 | `ws_tx` | `Option<WsTx>` | | event sink | Broadcast sender for real-time UI events (None standalone). **Adonai: Dear ImGui state sink, NO web/WebSocket.** |
+| 78 | `ws_tx` | `Option<WsTx>` | | event sink | Broadcast sender for real-time UI events (None standalone). **Nxrth: Dear ImGui state sink, NO web/WebSocket.** |
 | 79 | `last_ping` | `u32` | | `uint32_t` | Last broadcast ping; suppresses redundant ping events. |
 | 80 | `geiger_green_repeat` | `Option<GeigerGreenRepeat>` | | `std::optional<GeigerGreenRepeat>` | See §1.6. |
 
@@ -296,7 +296,7 @@ return base
 ### 2.2 `BotHost` methods
 
 - **`next_event() -> Option<EventNoRef>`**: call `host.service()`. On `Ok(Some(e))` return the event (`e.no_ref()`); on `Ok(None)` OR **`Err(_)` return `None`** (skip the tick). CRITICAL: a socket-level error from `enet_host_service` (e.g. transient Windows `WSAECONNRESET` after a SOCKS5 relay ICMP "port unreachable") must NOT crash the bot thread — swallow it. A truly dead relay is still caught by ENet's own timeout → clean Disconnect event.
-- **`connect(addr, channels, data)`**: `host.connect(addr, channels, data)`; the Rust `.expect("connect failed")` panics on failure — in Adonai, treat a connect error as a failed attempt (log + let the run loop retry), do **not** abort the process.
+- **`connect(addr, channels, data)`**: `host.connect(addr, channels, data)`; the Rust `.expect("connect failed")` panics on failure — in Nxrth, treat a connect error as a failed attempt (log + let the run loop retry), do **not** abort the process.
 - **`peer_rtt(id) -> Duration`**: `host.peer_mut(id).round_trip_time()`.
 - **`peer_send(id, channel, packet)`**: `host.peer_mut(id).send(channel, packet)`, ignore the Result (`.ok()`).
 - **`peer_disconnect(id, data)`**: `host.peer_mut(id).disconnect(data)`.
@@ -317,7 +317,7 @@ C++: build the ENet host with the vendored/patched ENet (SOCKS5-UDP support). Th
 
 ### 2.4 Constructors
 
-All five public constructors share the same tail: build a `log_fn` closure (writes to `logger::log`, pushes to `state.console` capped at **100** lines dropping the oldest, and emits a `WsEvent::Console{bot_id, message}`), stagger the HTTP login via `wait_global_gate(&HTTP_LOGIN_GATE, HTTP_LOGIN_STAGGER_MS)` (logging `"[Bot] staggering HTTP login by {ms} ms (avoids simultaneous-login throttle)"` if >0), fetch credentials, then build the `Bot` and call `bot.host.connect(addr, 2, 0)`. All return `Option<Bot>` (Adonai: `std::optional<Bot>` or nullable) — a failed spawn returns `None`/null and must NOT panic the worker thread.
+All five public constructors share the same tail: build a `log_fn` closure (writes to `logger::log`, pushes to `state.console` capped at **100** lines dropping the oldest, and emits a `WsEvent::Console{bot_id, message}`), stagger the HTTP login via `wait_global_gate(&HTTP_LOGIN_GATE, HTTP_LOGIN_STAGGER_MS)` (logging `"[Bot] staggering HTTP login by {ms} ms (avoids simultaneous-login throttle)"` if >0), fetch credentials, then build the `Bot` and call `bot.host.connect(addr, 2, 0)`. All return `Option<Bot>` (Nxrth: `std::optional<Bot>` or nullable) — a failed spawn returns `None`/null and must NOT panic the worker thread.
 
 - **`new(username, password, proxy, login_proxy, stop, state, cmd_rx, items_dat, bot_id, ws_tx) -> Option<Bot>`**: HTTP-stagger → `fetch_credentials(...)` (returns `None` → propagate `None`) → `new_with_credentials(username, LoginMethod::Legacy{password}, creds, ...)`.
 - **`new_requestly(...)`**: identical but `fetch_requestly_credentials` + `LoginMethod::Requestly{password}`.
@@ -330,7 +330,7 @@ All five public constructors share the same tail: build a `log_fn` closure (writ
   - Write to shared state: `s.username`, `s.mac`, `s.collect_radius_tiles`, `s.collect_blacklist = sorted_blacklist_vec(...)`.
   - `bot.host.connect(addr, 2, 0)`; return bot.
 - **`new_ltoken(ltoken_str, proxy, login_proxy, stop, state, cmd_rx, items_dat, bot_id, ws_tx) -> Option<Bot>`**:
-  - `parse_ltoken_string(ltoken_str)` (see below); `None` → log `"[Bot] Invalid ltoken string — expected token|rid|mac|wk; not spawning bot"` and return `None`.
+  - `parse_ltoken_string(ltoken_str)` (see below); invalid positional or keyed input is rejected before the bot starts.
   - `rid/mac/wk` = parsed value or default (`value_or_default`). All other identity fields set to hardcoded defaults (`hash=DEFAULT_HASH`, `hash2=DEFAULT_HASH2`, `fz=DEFAULT_FZ`, `game_version=GAME_VER`, `cbits="1536"`, `player_age="23"`, `gdpr="2"`, `category="_16"`, `total_playtime="0"`, `country="us"`, `zf=DEFAULT_ZF`, `platform_id=DEFAULT_PLATFORM_ID`, `steam_token=DEFAULT_STEAM_TOKEN`, `klv=default_klv(rid,hash)`).
   - HTTP-stagger, then **server_data fetch loop** (see §2.6). `meta` from the response.
   - Parse `"{server}:{port}"` → `SocketAddr`; on error log `"[Bot] invalid server address ... — not spawning bot"` and return `None`.
@@ -341,7 +341,14 @@ All five public constructors share the same tail: build a `log_fn` closure (writ
   - HTTP-stagger, server_data fetch loop, `meta` from response, parse addr (same error handling → `None`).
   - `host = create_host(proxy)`, `login_method = HarToken{har_path}`, `bypass_enet=None`, `username=""`. `connect(addr,2,0)`, return. (Note: `new_har_token` does NOT write mac/collect state to shared state before connecting — a minor divergence; keep or normalize, but match if bit-exact behavior matters.)
 
-**`parse_ltoken_string(s: &str) -> Option<(String,String,String,String)>`**: trim; empty → `None`. Split on `|`, trim each part. If exactly 4 parts and part0 non-empty → `(token, rid, mac, wk)`. Otherwise → `(whole_trimmed_string, "", "", "")`.
+**`parse_ltoken_string(s) -> Option<LtokenRecord>`**: accepts strict positional
+`refreshToken|rid|mac|wk` records and provider-keyed `key:value|...` records.
+Positional and keyed `refreshToken:` inputs use `checktoken`; keyed provider
+`token:` inputs are gateway tokens and skip that exchange.
+Keyed fields are order-independent, unknown fields are tolerated, and required
+fields are `token`, 32-character `rid`, non-empty `mac`, and either a
+32-character `wk` or `NONE0`. Optional `platform`, `name`, `cbits`,
+`playerAge`, and `vid` metadata is parsed when valid.
 
 **`login_token_field(token: &str) -> &'static str`**: if the token contains ≥ 3 dot-separated segments (JWT-shaped) return `"UbiTicket"`, else `"token"`. Selects which field the login packet uses (see §2.9).
 
@@ -357,7 +364,7 @@ All five public constructors share the same tail: build a `log_fn` closure (writ
 3. Log `"[Bot] fetching server_data (alternate={alternate})..."`.
 4. `get_server_data_proxied(alternate, &login_info, proxy_url)`: `Ok(s)` → break with `s`; `Err(e)` → flip `alternate`, log `"[Bot] fetch: server_data failed: {e} — retrying in 5s"`, sleep **5 s**, retry.
 
-`alternate` toggles the growtopia vs growtopia2 host. `get_server_data_proxied` is the server_data module (libcurl in Adonai).
+`alternate` toggles the growtopia vs growtopia2 host. `get_server_data_proxied` is the server_data module (libcurl in Nxrth).
 
 ### 2.7 `run(&mut self, stop_flag: Arc<AtomicBool>)` — the main loop
 
@@ -372,7 +379,7 @@ One iteration:
    - Log `"[Bot] login stalled — 30s connected with no world (flaky game proxy?); dropping to retry via gateway"`.
    - Rotate game proxy: `proxy_pool::next_game_proxy(self.proxy)` → if `Some(fresh)` log `"[Bot] rotating game proxy after stall → {fresh.proxy_addr}"`, `self.proxy = Some(fresh)`.
    - `connected_since=None`, `redirect=None`, `redirect_attempts=0`, `redirect_connect_fails=0`, `saw_server_hello=false` (so the resulting Disconnect routes to a clean gateway reconnect), and if `peer_id` present, `peer_disconnect(id, 0)`.
-8. `drain_script_requests()` — **Adonai: replace with native automation dispatch, NO Lua** (§3).
+8. `drain_script_requests()` — **Nxrth: replace with native automation dispatch, NO Lua** (§3).
 9. If `auto_collect` and `collect_timer.elapsed() >= 500ms`: reset `collect_timer`, call `collect()`.
 10. Sleep **10 ms**.
 
@@ -552,9 +559,9 @@ All are newline-terminated `key|value\n` strings sent via `send_text` (message t
 
 ---
 
-## 3. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 3. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
-| Rust dependency (this module) | Used for | Adonai C++ replacement |
+| Rust dependency (this module) | Used for | Nxrth C++ replacement |
 |---|---|---|
 | `rusty_enet` (`enet::Host`, `Packet`, `PeerID`, `RangeCoder`, `crc32`, `HostSettings`) | ENet game protocol over UDP | **Vendored C ENet, patched for SOCKS5-UDP.** Keep `peer_limit=1`, `channel_limit=2`, range-coder compressor, crc32 checksum, "new packet" mode. |
 | `crate::socks5::Socks5UdpSocket` | SOCKS5 UDP-ASSOCIATE tunnel for the ENet socket | The patched ENet socket backend + a SOCKS5 UDP client (see socks5 spec). `bind_through_proxy(local, proxy_addr, user, pass)`. |
@@ -563,7 +570,7 @@ All are newline-terminated `key|value\n` strings sent via `send_text` (message t
 | `serde_json` (in auth/server_data) | JSON parse of login responses | **nlohmann/json**. |
 | `md5` (via `compute_klv`) | KLV key derivation | **bundled md5**. |
 | `argon2` (elsewhere in auth) | password hashing on some login paths | **argon2 lib** (not directly in this file; carry for auth). |
-| `crossbeam_channel` (`event_tx`, `script_req_rx`, `script_reply_tx`) | script thread comms | **`std::mutex` + `std::condition_variable` bounded queue** (`try_recv`/`try_send` semantics: non-blocking). In Adonai these feed the **native automation subsystem**, not Lua. |
+| `crossbeam_channel` (`event_tx`, `script_req_rx`, `script_reply_tx`) | script thread comms | **`std::mutex` + `std::condition_variable` bounded queue** (`try_recv`/`try_send` semantics: non-blocking). In Nxrth these feed the **native automation subsystem**, not Lua. |
 | `mlua` (script_stop, drain_script_requests) | Lua scripting VM | **NONE — native C++ automation.** `script_stop` becomes an automation-interrupt flag; `drain_script_requests()` becomes native command dispatch. Drop Lua entirely. |
 | `tokio`/`axum`/`tower` (`ws_tx: WsTx`, `WsEvent`) | async web server + WebSocket UI feed | **`std::thread` + Dear ImGui native UI. NO web server, NO WebSocket.** Replace `emit(WsEvent::…)` with pushing into an ImGui-observed state/event buffer. Keep the console-ring-buffer (cap 100) and per-bot event semantics; render them in ImGui. |
 | `std::sync::{Arc, Mutex, RwLock, OnceLock, AtomicBool}` | shared ownership + gates | `std::shared_ptr`, `std::mutex`, a read/write lock (`std::shared_mutex`), lazy-init statics (function-local static or `std::once_flag`), `std::atomic<bool>`. |
@@ -577,11 +584,11 @@ libcurl specifics for the login flow: use `socks5h://` (remote DNS) so the proxy
 
 **Per-bot threading.** Each `Bot` runs on its own OS thread; `run()` is the thread body — a 10 ms tick loop that services ENet, drains commands, runs the login watchdog, dispatches automation, and auto-collects. There is **no async**; port to one `std::thread` per bot. The ENet host, peer, and all non-`pub` fields are single-thread-owned by that loop.
 
-**Bot ↔ UI shared state.** `state: Arc<RwLock<BotState>>` is the read-mostly bridge to the UI. The bot writes status/world/players/ping/console; the UI reads. Console is a ring buffer capped at **100** entries (drop oldest). In Adonai: `std::shared_ptr` + `std::shared_mutex`; ImGui reads it. Rust recovers from a poisoned lock via `PoisonError::into_inner` — in C++ there is no poisoning; just lock normally, but never hold the state lock across an ENet/network call.
+**Bot ↔ UI shared state.** `state: Arc<RwLock<BotState>>` is the read-mostly bridge to the UI. The bot writes status/world/players/ping/console; the UI reads. Console is a ring buffer capped at **100** entries (drop oldest). In Nxrth: `std::shared_ptr` + `std::shared_mutex`; ImGui reads it. Rust recovers from a poisoned lock via `PoisonError::into_inner` — in C++ there is no poisoning; just lock normally, but never hold the state lock across an ENet/network call.
 
-**Bot ↔ script/automation.** `event_tx`/`script_req_rx`/`script_reply_tx` are crossbeam channels to a script worker. In Adonai these become mutex+condvar queues feeding the **native** automation subsystem (no Lua). `script_stop` is a shared `atomic<bool>` interrupt.
+**Bot ↔ script/automation.** `event_tx`/`script_req_rx`/`script_reply_tx` are crossbeam channels to a script worker. In Nxrth these become mutex+condvar queues feeding the **native** automation subsystem (no Lua). `script_stop` is a shared `atomic<bool>` interrupt.
 
-**FLEET-WIDE shared state — the stagger gates (the important cross-bot coupling).** The six process-static gates (§1.2) plus `reserve_gate_slot`/`reserve_throttle_slot`/`wait_global_gate` are the ONLY state shared across *all* bots, and they are how bots become "aware of each other" for login pacing. Every bot reserves slots from the same monotonic cursor so the fleet's HTTP logins, login packets, enter-game, warps, and post-throttle reconnects are serialized/spaced rather than bursting. In Adonai these MUST remain a single set of process-global objects shared by every bot thread (a `std::mutex`-guarded `steady_clock::time_point` each), lazily initialized once. Getting this wrong = the "toplu sokunca giremiyor" (can't mass-login) failure the comments describe. Design notes to preserve:
+**FLEET-WIDE shared state — the stagger gates (the important cross-bot coupling).** The six process-static gates (§1.2) plus `reserve_gate_slot`/`reserve_throttle_slot`/`wait_global_gate` are the ONLY state shared across *all* bots, and they are how bots become "aware of each other" for login pacing. Every bot reserves slots from the same monotonic cursor so the fleet's HTTP logins, login packets, enter-game, warps, and post-throttle reconnects are serialized/spaced rather than bursting. In Nxrth these MUST remain a single set of process-global objects shared by every bot thread (a `std::mutex`-guarded `steady_clock::time_point` each), lazily initialized once. Getting this wrong = the "toplu sokunca giremiyor" (can't mass-login) failure the comments describe. Design notes to preserve:
 - Connected-phase gates (LOGIN_PACKET/ENTER_GAME/WARP) service ENet during the wait (`wait_for_global_gate`) and use the small `GATE_CONNECTED_MAX_AHEAD_MS=2500` ceiling; the HTTP gate dead-sleeps with the large `GATE_HTTP_MAX_AHEAD_MS=300000` ceiling.
 - `in_gate_wait` prevents recursion when the serviced wait's `service_once` re-enters another gate.
 - The gateway-throttle gate (`GATEWAY_LOGON_GATE`) applies a `32 s` cooldown floor + `1.5 s` single-file spacing, capped at cooldown+60 s.
@@ -589,21 +596,21 @@ libcurl specifics for the login flow: use `socks5h://` (remote DNS) so the proxy
 
 ---
 
-## 5. RENAME RULES (Mori→Adonai, Cloei→North) for the C++ port
+## 5. RENAME RULES (Mori→Nxrth, Cloei→North) for the C++ port
 
 General rules to apply mechanically across this module:
-- Every `Mori`/`mori` identifier, file/module path, log line, window title, user-agent, config filename → `Adonai`/`adonai`.
+- Every `Mori`/`mori` identifier, file/module path, log line, window title, user-agent, config filename → `Nxrth`/`nxrth`.
 - Every `Cloei`/`cloei` (upstream author/repo) → `North`/`north`.
 
 **Concrete occurrences found in `bot/core.rs`:**
-- **Line 167**, doc comment on `LoginMethod::Newly`: `"Original Mori-style GrowID login without HAR fallbacks."` → `"Original Adonai-style GrowID login without HAR fallbacks."` (the ONLY literal `Mori` in this file).
+- **Line 167**, doc comment on `LoginMethod::Newly`: `"Original Mori-style GrowID login without HAR fallbacks."` → `"Original Nxrth-style GrowID login without HAR fallbacks."` (the ONLY literal `Mori` in this file).
 - **No `Cloei`/`cloei` occurrences** appear in this file.
 
 **Cross-cutting rename targets in this module (not literal "Mori" here, but part of the framework identity — normalize when porting):**
-- The `crate::` module paths (`crate::logger`, `crate::proxy_pool`, `crate::socks5`, `crate::har_parser`, `crate::bot_state`, …) become Adonai namespaces/headers (e.g. `adonai::logger`). The crate itself is the Mori binary (`Mori.exe`) → Adonai (`Adonai.exe`); see the build/copy convention memory note (build → copy to the Adonai test folder).
+- The `crate::` module paths (`crate::logger`, `crate::proxy_pool`, `crate::socks5`, `crate::har_parser`, `crate::bot_state`, …) become Nxrth namespaces/headers (e.g. `nxrth::logger`). The crate itself is the Mori binary (`Mori.exe`) → Nxrth (`Nxrth.exe`); see the build/copy convention memory note (build → copy to the Nxrth test folder).
 - Log-line tags `"[Bot]"` / `"[Bot#{id}]"` are NOT Mori-branded — keep as-is (or rebrand only if you rebrand the whole log format).
 - `requestly_logs.har` (referenced by `LoginMethod::Requestly`) is a fixed external filename, not a Mori identifier — leave unless the operator's config renames it.
-- Any operator-facing strings you add (window title, user-agent, config filenames) must use `Adonai`/`adonai`. This module itself sets no window title or user-agent (those live in the web/UI and HTTP layers — apply the rename there).
+- Any operator-facing strings you add (window title, user-agent, config filenames) must use `Nxrth`/`nxrth`. This module itself sets no window title or user-agent (those live in the web/UI and HTTP layers — apply the rename there).
 - The disabled `check_token` block and `println!("=== RAW LOGIN PACKET ===")` carry no brand strings; port or drop the stdout dump as you prefer.
 
 ---

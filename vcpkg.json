@@ -1,12 +1,13 @@
 {
-  "name": "adonai",
+  "name": "nxrth",
   "version": "0.1.0",
-  "description": "Adonai — native C++ Growtopia fleet client (ImGui, in-engine automation).",
+  "description": "Nxrth — native C++ Growtopia fleet client (ImGui, in-engine automation).",
   "builtin-baseline": "00807e89724847a866033a2f042c38fafae3c534",
   "dependencies": [
-    { "name": "imgui", "features": ["glfw-binding", "opengl3-binding", "docking-experimental"] },
+    { "name": "imgui", "features": ["glfw-binding", "dx11-binding", "docking-experimental"] },
     "glfw3",
     "curl",
+    "lua",
     "nlohmann-json"
   ]
 }

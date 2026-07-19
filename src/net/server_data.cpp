@@ -1,4 +1,4 @@
-// Adonai — server_data.php fetch + parse (ported from Mori server_data.rs).
+// Nxrth — server_data.php fetch + parse (ported from Mori server_data.rs).
 // See docs/port-specs/03-net-socks5.md (server_data.rs section).
 
 #include "net/server_data.h"
@@ -11,7 +11,7 @@
 #include "core/logger.h"
 #include "net/http_client.h"
 
-namespace adonai::net {
+namespace nxrth::net {
 
 namespace {
 
@@ -70,7 +70,7 @@ ServerDataResult fetch_server_data_from_endpoint(bool alternate, const LoginInfo
     // 2. Log the redacted proxy (Rust `{:?}` of Option<String>).
     std::string proxy_dbg = proxy_url ? ("Some(\"" + redact_proxy_url(*proxy_url) + "\")")
                                       : std::string("None");
-    adonai::log("[server_data] proxy_url=" + proxy_dbg);
+    nxrth::log("[server_data] proxy_url=" + proxy_dbg);
 
     // 3/4. Build the POST: TLS-verify OFF, 20s timeout, verbatim UA + Content-Type.
     //      Body is inline with a "platform=0&" prefix (LoginInfo::to_form_data lacks it).
@@ -91,24 +91,28 @@ ServerDataResult fetch_server_data_from_endpoint(bool alternate, const LoginInfo
     // 6. Transport error (mirrors ureq Err(e), including non-2xx which ureq treats
     //    as an error).
     if (!resp.ok()) {
-        adonai::log("[server_data] Error fetching " + url + ": " + resp.error);
+        nxrth::log("[server_data] Error fetching " + url + ": " + resp.error);
         return make_err(resp.error);
     }
     if (resp.status >= 400) {
         std::string e = "HTTP status " + std::to_string(resp.status);
-        adonai::log("[server_data] Error fetching " + url + ": " + e);
+        nxrth::log("[server_data] Error fetching " + url + ": " + e);
         return make_err(e);
     }
 
-    // 5. Success: log the response, parse, then check the required login fields.
-    adonai::log("[server_data] Response from " + url + ": \n" + resp.body);
-
+    // 5. Success: parse, then check the required login fields. The raw body carries
+    // the per-session `meta` nonce, so log a size-only summary (never the full body).
     std::optional<ServerData> parsed = ServerData::parse_from_response(resp.body);
     if (!parsed) {
         // Numeric parse failure aborted the parse (mirrors the Rust `?`).
+        nxrth::log("[server_data] " + url + " parse failed (" +
+                    std::to_string(resp.body.size()) + " bytes)");
         return make_err("server_data response from " + url + " failed to parse");
     }
     if (parsed->has_required_login_fields()) {
+        nxrth::log("[server_data] " + url + " -> " + parsed->server + ":" +
+                    std::to_string(parsed->port) + " (meta " +
+                    std::to_string(parsed->meta.size()) + " bytes)");
         return ServerDataResult{std::move(parsed), std::string()};
     }
     return make_err("server_data response from " + url + " is missing login fields");
@@ -243,4 +247,4 @@ ServerDataResult get_server_data_proxied_live(bool alternate, const LoginInfo& l
     return fetch_server_data_from_endpoint(alternate, login_info, proxy_url);
 }
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

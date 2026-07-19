@@ -1,8 +1,8 @@
-# Adonai Port Spec — Module 05: Login / Auth
+# Nxrth Port Spec — Module 05: Login / Auth
 
 **Source (Rust / "Mori"):** `login.rs`, `auth.rs`, `dashboard.rs`, `har_parser.rs`, `bot/auth.rs`
 **Supporting source read for self-containment:** `server_data.rs`, `constants.rs`, `account_devices.rs`, `protocol/crypto.rs`, `bot/shared.rs`, `proxy_pool.rs` (excerpts), `bot/core.rs` (excerpts: gates, `build_login_packet`, `LoginMethod`).
-**Target (C++ / "Adonai"):** reimplement WITHOUT reading the Rust. This document is the single source of truth.
+**Target (C++ / "Nxrth"):** reimplement WITHOUT reading the Rust. This document is the single source of truth.
 
 > Naming: everywhere below, apply the rename rules in §10. The identifiers in this spec are the *Rust originals* so you can cross-reference; the C++ code must use the renamed forms.
 
@@ -20,14 +20,14 @@ This module turns a `(username, password)` (or a raw token) into a Growtopia **`
 | Ltoken (direct) | `Bot::new_ltoken` (core.rs) | — | — | token supplied directly |
 | HarToken | `Bot::new_har…` (core.rs) | — | — | token extracted from a local `.har` |
 
-The canonical **newly** flow (the one to prioritize in Adonai):
+The canonical **newly** flow (the one to prioritize in Nxrth):
 ```
 server_data POST  →  growid dashboard POST (22 fields)  →  parse dashboard HTML for Growtopia href
    →  GET that href (extract CSRF _token)  →  growid/login/validate POST  →  ltoken (JSON "token")
 ```
 
 Two entirely separate "auth" concerns share the word *auth*; do not confuse them:
-1. **`auth.rs`** = the **local operator/web-UI password** (Argon2id) that gates the Mori control panel. This is *not* Growtopia login. In Adonai (native Dear ImGui, no web server) this becomes an optional local unlock gate. Documented in §5.
+1. **`auth.rs`** = the **local operator/web-UI password** (Argon2id) that gates the Mori control panel. This is *not* Growtopia login. In Nxrth (native Dear ImGui, no web server) this becomes an optional local unlock gate. Documented in §5.
 2. **`bot/auth.rs`** = the **Growtopia account login** orchestration. This is the core of the module.
 
 ---
@@ -231,7 +231,7 @@ AuthInner  { password_hash: Option<String>, session_token: Option<String> }
 ```
 enum LoginMethod {
     Legacy   { password: String },   // GrowID; on refresh-fail re-login w/ password
-    Newly    { password: String },   // "Original Mori-style" GrowID, no HAR fallbacks  [rename: Adonai-style]
+    Newly    { password: String },   // "Original Mori-style" GrowID, no HAR fallbacks  [rename: Nxrth-style]
     Requestly{ password: String },   // HAR-backed; on refresh-fail replay requestly_logs.har
     Ltoken,                          // token given directly; on refresh-fail STOP (no fallback)
     HarToken { har_path: String },   // token from local .har; bypasses server_data.php
@@ -663,7 +663,7 @@ C++: use a CSPRNG (or `std::random_device`+`mt19937_64`); UUIDv4 not required �
 
 ## 5. Local operator auth (`auth.rs`) — the control-panel unlock, NOT GT login
 
-This gates access to the Mori panel/web UI. In Adonai (native Dear ImGui, no web server) this becomes an optional local password unlock; keep the crypto identical if you want existing `data/user.json` to remain valid.
+This gates access to the Mori panel/web UI. In Nxrth (native Dear ImGui, no web server) this becomes an optional local password unlock; keep the crypto identical if you want existing `data/user.json` to remain valid.
 
 - `UserRecord{ password_hash }` persisted to `data/user.json` (JSON, pretty).
 - `user_path()` = `CWD/data/user.json`.
@@ -708,25 +708,25 @@ Mechanism in this module:
 - If `login_session()` returns None (endpoint not SOCKS5-UDP capable) there are **no candidates** — the bot logs and retries in 5s. There is no http:// fallback (it can't speak to a SOCKS5 listener; it only spammed `ConnectionReset (10054)`).
 - Log line on success: `"[Bot] bypass logon: token pinned to logon IP {proxy_addr} — ENet logon will use it, world stays on game proxy"`.
 
-**Adonai/C++ requirement:** the vendored ENet must be patched for SOCKS5-UDP (UDP ASSOCIATE), and both the libcurl HTTP fetch and the ENet logon must be given the identical SOCKS5 endpoint for a given login attempt. Use `socks5h://` for the HTTP side so DNS also resolves proxy-side (consistent egress). See also `MEMORY.md: GT ltoken IP-binding` — a rotating-per-stage proxy breaks login; use a consistent pool proxy.
+**Nxrth/C++ requirement:** the vendored ENet must be patched for SOCKS5-UDP (UDP ASSOCIATE), and both the libcurl HTTP fetch and the ENet logon must be given the identical SOCKS5 endpoint for a given login attempt. Use `socks5h://` for the HTTP side so DNS also resolves proxy-side (consistent egress). See also `MEMORY.md: GT ltoken IP-binding` — a rotating-per-stage proxy breaks login; use a consistent pool proxy.
 
 ---
 
 ## 8. Threading & shared state
 
 - **Per-bot thread model:** each bot runs on its own `std::thread`. `fetch_*credentials` is called synchronously on that thread during construction/reconnect. The functions loop-with-sleep (5s between full retry rounds) and poll a shared `stop: AtomicBool` at each iteration/candidate to allow clean cancellation. In C++: `std::atomic<bool> stop`, checked at the same points.
-- **`log` callback:** `&mut dyn FnMut(String)` — a per-bot logger that appends to the bot's console ring buffer (cap 100 lines) and optionally pushes to the UI. In Adonai this is a `std::function<void(std::string)>` writing to the bot's log buffer + Dear ImGui console; no web socket.
+- **`log` callback:** `&mut dyn FnMut(String)` — a per-bot logger that appends to the bot's console ring buffer (cap 100 lines) and optionally pushes to the UI. In Nxrth this is a `std::function<void(std::string)>` writing to the bot's log buffer + Dear ImGui console; no web socket.
 - **Fleet-wide dashboard gate (`pace_dashboard` / `DASHBOARD_GATE`):** a process-global `Mutex<Instant>` (via `OnceLock`) hands out time slots spaced **`DASHBOARD_STAGGER_MS = 3500`ms** apart, capped `GATE_HTTP_MAX_AHEAD_MS = 300_000`ms (5 min) ahead. Every dashboard POST across the whole fleet passes through this gate so the shared bypass subnet doesn't trip the endpoint's per-subnet rate limit ("Please try login again" — the dominant bulk-login wall). `reserve_gate_slot(gate, spacing, max_ahead)`: lock, `slot = clamp(*next_allowed, now, now+max_ahead)`, `*next_allowed = min(slot+spacing, horizon)`, return slot; `wait_global_gate` sleeps until slot **without holding the lock**. C++: a `std::mutex` + a `steady_clock::time_point next_allowed`; compute slot, release the lock, then `sleep_until(slot)`.
 - **HTTP-login gate (`HTTP_LOGIN_GATE` / `HTTP_LOGIN_STAGGER_MS = 2500`):** a *separate* fleet gate wrapping the whole HTTP re-login (server_data+dashboard+growid) on constructor/reconnect/refresh paths (`pace_http_login`). Both gates use the same `reserve_gate_slot`/`wait_global_gate` machinery but distinct static instances. Port both as distinct global gate objects.
 - **Account-device store (`account_devices.rs`):** guarded by a process-global `STORE_LOCK: Mutex<()>`. All reads/writes of `data/account_devices.json` take this lock (read-modify-write is not atomic otherwise). C++: one `std::mutex` guarding the JSON file; load→mutate→store under the lock.
 - **`AuthState` (control-panel):** `Arc<RwLock<AuthInner>>`, single-user/single-session. Port as `std::shared_mutex` (or plain mutex) around `{optional<string> password_hash, optional<string> session_token}`.
-- **Fleet awareness:** the two fleet gates + the `LOGIN_PROXY_RR` round-robin cursor (in `RotatingLoginProxy::pick`, `AtomicUsize`) are the cross-bot shared state relevant here — bots coordinate login pacing and exit-IP spreading through them. In Adonai these belong to a shared/fleet singleton (a `LoginCoordinator`) with a mutex+condvar queue for pacing and an atomic round-robin index for proxy picking. Keep them process-global so all bot threads share one schedule.
+- **Fleet awareness:** the two fleet gates + the `LOGIN_PROXY_RR` round-robin cursor (in `RotatingLoginProxy::pick`, `AtomicUsize`) are the cross-bot shared state relevant here — bots coordinate login pacing and exit-IP spreading through them. In Nxrth these belong to a shared/fleet singleton (a `LoginCoordinator`) with a mutex+condvar queue for pacing and an atomic round-robin index for proxy picking. Keep them process-global so all bot threads share one schedule.
 
 ---
 
-## 9. Dependency mapping (Rust crate → Adonai C++)
+## 9. Dependency mapping (Rust crate → Nxrth C++)
 
-| Rust | Used for (here) | Adonai C++ |
+| Rust | Used for (here) | Nxrth C++ |
 |------|-----------------|------------|
 | `ureq` (agent, proxy, timeout, TLS) | all HTTP: server_data, dashboard, growid, checktoken | **libcurl**. `CURLOPT_PROXY` = `socks5h://user:pass@host:port` (proxy-side DNS). `CURLOPT_TIMEOUT` = 20/30s. `CURLOPT_FOLLOWLOCATION=0` for dashboard (manual redirects). server_data: `CURLOPT_SSL_VERIFYPEER/HOST=0` (TLS verification disabled). Enable cookie engine if needed. |
 | `serde_json` / `serde` | HAR parse, account_devices.json, user.json | **nlohmann/json**. HAR: tolerate missing fields (defaults ""/[]). |
@@ -744,18 +744,18 @@ Mechanism in this module:
 
 ---
 
-## 10. RENAME RULES (Mori→Adonai, mori→adonai, Cloei→North, cloei→north)
+## 10. RENAME RULES (Mori→Nxrth, mori→nxrth, Cloei→North, cloei→north)
 
 Apply to every identifier, path, log line, window title, user-agent, config filename in the C++ port. Note: **no Growtopia protocol string may change** — UA strings sent to GT (`UbiServices_SDK_…`, the Mozilla/Chrome UAs), field names, URLs, valKey, klv keys, `RTENDMARKERBS1001`, etc. are **wire-fixed and must stay verbatim**.
 
 **Concrete occurrences found in the read files (rename in comments/logs/docs only):**
-- `dashboard.rs:196` comment: `"…canonical growid dashboard POST (upstream cloei/mori) sends exactly the 22 fields…"` → `"…(upstream north/adonai)…"`.
-- `bot/auth.rs:238` comment: `"…canonical upstream (cloei/mori) fixed web values…"` → `"…(north/adonai)…"`.
-- `bot/core.rs` `LoginMethod::Newly` doc comment: `"Original Mori-style GrowID login without HAR fallbacks."` → `"Original Adonai-style GrowID login without HAR fallbacks."`.
-- The `crate::` module path root (implicitly `mori`) and the source tree name `Mori-2.0.0` → `adonai` / `Adonai-*`.
-- Repo/folder codename `MoriReborn` (build dir) → `AdonaiReborn` (or per project convention).
+- `dashboard.rs:196` comment: `"…canonical growid dashboard POST (upstream cloei/mori) sends exactly the 22 fields…"` → `"…(upstream north/nxrth)…"`.
+- `bot/auth.rs:238` comment: `"…canonical upstream (cloei/mori) fixed web values…"` → `"…(north/nxrth)…"`.
+- `bot/core.rs` `LoginMethod::Newly` doc comment: `"Original Mori-style GrowID login without HAR fallbacks."` → `"Original Nxrth-style GrowID login without HAR fallbacks."`.
+- The `crate::` module path root (implicitly `mori`) and the source tree name `Mori-2.0.0` → `nxrth` / `Nxrth-*`.
+- Repo/folder codename `MoriReborn` (build dir) → `NxrthReborn` (or per project convention).
 
-**Not present in these files but rename globally if they appear elsewhere:** the binary name `Mori.exe`→`Adonai.exe` (see `MEMORY.md: Mori build→copy convention`), window title `"Mori"`→`"Adonai"`, any UA/config filename literally containing `mori`, and any `cloei` repo references. The log-line prefix `[Bot]` and `[server_data]` contain no Mori/Cloei tokens and stay as-is (or rebrand consistently if desired — not required). Data filenames `requestly_logs.har`, `orijinal_requestly_logs.har`, `data/user.json`, `data/account_devices.json` contain no Mori/Cloei tokens and are **kept as-is** (they are external capture / on-disk store names, and the HAR filename is matched literally).
+**Not present in these files but rename globally if they appear elsewhere:** the binary name `Mori.exe`→`Nxrth.exe` (see `MEMORY.md: Mori build→copy convention`), window title `"Mori"`→`"Nxrth"`, any UA/config filename literally containing `mori`, and any `cloei` repo references. The log-line prefix `[Bot]` and `[server_data]` contain no Mori/Cloei tokens and stay as-is (or rebrand consistently if desired — not required). Data filenames `requestly_logs.har`, `orijinal_requestly_logs.har`, `data/user.json`, `data/account_devices.json` contain no Mori/Cloei tokens and are **kept as-is** (they are external capture / on-disk store names, and the HAR filename is matched literally).
 
 ---
 

@@ -1,4 +1,4 @@
-# Adonai — first-compile reconciliation
+# Nxrth — first-compile reconciliation
 
 The port is spec-driven and was authored without an in-loop C++ compiler, so the
 FIRST `cmake --build` will surface integration errors. This is expected for a
@@ -23,23 +23,23 @@ or flagged.
 
 ## Known items to resolve at first compile
 1. **HAR / Requestly — REMOVED (done 2026-07-11).** `LoginMethodKind` is now
-   `Legacy / Newly / Ltoken`; `create_requestly` / `create_har_token` /
+   `Legacy / Google OAuth Ltoken`; `create_requestly` / `create_har_token` /
    `spawn_requestly` / `spawn_har_token` and the `fetch_requestly_credentials` /
    `extract_har_auth_data` forward-decls are deleted; UI modes are
-   Standard / Newly / Ltoken. No functional HAR refs remain (verified).
+   Standard / Google OAuth Ltoken. No functional HAR refs remain (verified).
 2. **Cross-TU signature drift.** The `Bot` class is split across
    `bot_connection.cpp` / `bot_handlers.cpp` / `bot_world.cpp` against one `bot.h`.
    If any `.cpp` defines a method with a signature the header doesn't declare (or
    vice-versa), MSVC flags it — align to `bot.h`.
 3. **`emit_inventory_update`** is defined in `bot_world.cpp`; ensure
    `bot_handlers.cpp` only *calls* it (no duplicate definition).
-4. **ENet.** `net/enet_host.*` is guarded by `ADONAI_HAVE_ENET`. Until
+4. **ENet.** `net/enet_host.*` is guarded by `NXRTH_HAVE_ENET`. Until
    `third_party/enet/` is vendored + patched (see its README), the game connection
    is a stub. Vendor ENet, then rebuild.
 5. **items.dat** must be present at runtime (copy Growtopia's `items.dat` next to
    the exe / into `data/`), or `ItemsDat::load` fails and bots can't resolve items.
 
 ## Sanity checklist after it links
-- Window opens titled "Adonai", Tahoma font, dockable panels.
-- Add a bot (newly mode) with a proxy → it logs in (watch the Console panel).
+- Window opens titled "Nxrth", Tahoma font, dockable panels.
+- Add a bot (ltoken mode) with a proxy → checktoken validates and ENet connects.
 - Toggle an automation module → the shared `FleetState` flips and bots act.

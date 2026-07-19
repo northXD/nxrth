@@ -1,4 +1,4 @@
-// Adonai — per-bot inventory model (ported from Mori/inventory.rs).
+// Nxrth — per-bot inventory model (ported from Mori/inventory.rs).
 // Parses the inventory blob the server sends and maintains live inventory state.
 // Per-bot mutable state, guarded by the owning bot's external lock.
 #pragma once
@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace adonai::world {
+namespace nxrth::world {
 
 // Items removed on world-leave: World Key (1424), Magplant 5000 Remote (5640).
 inline constexpr std::array<std::uint16_t, 2> TEMPORARY_ITEM_IDS = {1424, 5640};
@@ -42,4 +42,4 @@ struct Inventory {
     bool remove_temp_items();  // true iff at least one temp item was removed
 };
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

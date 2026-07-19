@@ -1,4 +1,4 @@
-// Adonai - AutomationConfig disk persistence.
+// Nxrth - AutomationConfig disk persistence.
 #include "automation/config_store.h"
 
 #include <nlohmann/json.hpp>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace adonai::automation {
+namespace nxrth::automation {
 namespace {
 
 std::filesystem::path cfg_path() {
@@ -25,7 +25,7 @@ std::filesystem::path cfg_path() {
 
 }  // namespace
 
-void save_automation_config(const adonai::bot::AutomationConfig& cfg) {
+void save_automation_config(const nxrth::bot::AutomationConfig& cfg) {
     nlohmann::json j;
 
     nlohmann::json enabled = nlohmann::json::object();
@@ -58,7 +58,7 @@ void save_automation_config(const adonai::bot::AutomationConfig& cfg) {
     }
 }
 
-bool load_automation_config(adonai::bot::AutomationConfig& out) {
+bool load_automation_config(nxrth::bot::AutomationConfig& out) {
     try {
         std::ifstream in(cfg_path(), std::ios::binary);
         if (!in) return false;
@@ -81,10 +81,18 @@ bool load_automation_config(adonai::bot::AutomationConfig& out) {
         if (j.contains("module_groups") && j["module_groups"].is_object())
             for (auto it = j["module_groups"].begin(); it != j["module_groups"].end(); ++it)
                 out.module_groups[it.key()] = it.value().get<std::string>();
+
+        // Removed legacy fleet-status webhook. Prize reporting now lives only
+        // under AutoGeiger's geiger_webhook_url.
+        out.enabled.erase("webhook");
+        out.params.erase("webhook_url");
+        out.params.erase("webhook_interval_secs");
+        out.module_bot_ids.erase("webhook");
+        out.module_groups.erase("webhook");
         return true;
     } catch (...) {
         return false;
     }
 }
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

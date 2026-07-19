@@ -1,4 +1,4 @@
-// Adonai — proxy configuration model implementation.
+// Nxrth — proxy configuration model implementation.
 // Ported from Mori/proxy_pool.rs (docs/port-specs/04-proxy.md §3-§5).
 #include "proxy/proxy_pool.h"
 
@@ -26,7 +26,7 @@
 namespace fs = std::filesystem;
 using nlohmann::json;
 
-namespace adonai::proxy {
+namespace nxrth::proxy {
 namespace {
 
 // --- small string helpers ----------------------------------------------------
@@ -136,6 +136,15 @@ std::uint16_t random_rotating_port(std::uint16_t base_port, std::uint16_t span) 
     return static_cast<std::uint16_t>(base_port + (r % eff));
 }
 
+std::size_t random_index(std::size_t count) {
+    static thread_local std::mt19937 eng([] {
+        std::random_device rd;
+        std::seed_seq seq{rd(), rd(), rd(), rd()};
+        return std::mt19937(seq);
+    }());
+    return std::uniform_int_distribution<std::size_t>(0, count - 1)(eng);
+}
+
 // ============================ process-global state ===========================
 std::atomic<std::size_t> LOGIN_PROXY_RR{0};
 std::atomic<std::size_t> GAME_PROXY_RR{0};
@@ -144,9 +153,14 @@ std::mutex& game_pool_mutex() {
     static std::mutex m;
     return m;
 }
+struct PublishedGamePool {
+    std::vector<Socks5Config> proxies;
+    bool shuffle_selection = false;
+};
+
 // std::nullopt sentinel = "never published"; empty vector = published-but-empty.
-std::optional<std::vector<Socks5Config>>& game_pool_store() {
-    static std::optional<std::vector<Socks5Config>> store;
+std::optional<PublishedGamePool>& game_pool_store() {
+    static std::optional<PublishedGamePool> store;
     return store;
 }
 
@@ -196,6 +210,7 @@ json to_json_config(const ProxyPoolConfig& c) {
     j["enabled"] = c.enabled;
     j["max_bots_per_ip"] = c.max_bots_per_ip;
     j["spread_mode"] = spread_mode_as_str(c.spread_mode);
+    j["shuffle_selection"] = c.shuffle_selection;
     json arr = json::array();
     for (const auto& e : c.proxies) {
         json je;
@@ -231,6 +246,7 @@ ProxyPoolConfig from_json_config(const json& j) {
     c.enabled = j.at("enabled").get<bool>();
     c.max_bots_per_ip = j.at("max_bots_per_ip").get<std::size_t>();
     c.spread_mode = spread_mode_from_str(j.at("spread_mode").get<std::string>());
+    c.shuffle_selection = j.value("shuffle_selection", false);
     c.proxies.clear();
     for (const auto& je : j.at("proxies")) c.proxies.push_back(from_json_entry(je));
     c.next_index = j.at("next_index").get<std::size_t>();
@@ -481,7 +497,7 @@ void publish_game_pool(const ProxyPoolConfig& config) {
         }
     }
     std::lock_guard<std::mutex> lk(game_pool_mutex());
-    game_pool_store() = std::move(resolved);
+    game_pool_store() = PublishedGamePool{std::move(resolved), config.shuffle_selection};
 }
 
 }  // namespace
@@ -522,9 +538,22 @@ std::optional<Socks5Config> next_game_proxy(const Socks5Config* current) {
     std::lock_guard<std::mutex> lk(game_pool_mutex());
     auto& store = game_pool_store();
     if (!store) return std::nullopt;  // never published
-    const auto& pool = *store;
+    const auto& pool = store->proxies;
     const std::size_t len = pool.size();
     if (len < 2) return std::nullopt;
+
+    if (store->shuffle_selection) {
+        std::vector<std::size_t> candidates;
+        candidates.reserve(len);
+        for (std::size_t k = 0; k < len; ++k) {
+            const std::string key = pool[k].host + ":" + std::to_string(pool[k].port);
+            if (is_proxy_quarantined(key)) continue;
+            if (!current || !same_endpoint(pool[k], *current)) candidates.push_back(k);
+        }
+        if (candidates.empty()) return std::nullopt;
+        return pool[candidates[random_index(candidates.size())]];
+    }
+
     // Compare by resolved ip:port only; advance the shared cursor even on
     // skipped (same-as-current / quarantined) slots to keep global spread.
     for (std::size_t i = 0; i < len; ++i) {
@@ -555,11 +584,30 @@ void clear_quarantine() {
     quarantine_store().clear();
 }
 
+// --- active SOCKS5 reachability probe ----------------------------------------
+bool probe_socks5(const Socks5Config& cfg) {
+    if (cfg.host.empty() || cfg.port == 0) return false;
+    try {
+        // bind_through_proxy does the whole handshake (method negotiation,
+        // RFC-1929 auth, UDP ASSOCIATE) and throws on any failure. A returned,
+        // valid socket means the proxy is usable; its destructor tears it down.
+        nxrth::net::Socks5UdpSocket sock =
+            nxrth::net::Socks5UdpSocket::bind_through_proxy(cfg);
+        return sock.valid();
+    } catch (...) {
+        return false;
+    }
+}
+
 // ============================ RotatingLoginProxy ===========================
 ProxyEntry RotatingLoginProxy::pick() const {
     const std::size_t len = pool_.size();
     std::size_t idx = 0;
-    if (len > 1) idx = LOGIN_PROXY_RR.fetch_add(1, std::memory_order_relaxed) % len;
+    if (len > 1) {
+        idx = shuffle_selection_
+                  ? random_index(len)
+                  : LOGIN_PROXY_RR.fetch_add(1, std::memory_order_relaxed) % len;
+    }
     ProxyEntry proxy = pool_[idx];
     const std::uint16_t span = (len > 1) ? 1 : span_;  // multi-entry pools force span=1
     proxy.port = random_rotating_port(proxy.port, span);
@@ -684,6 +732,7 @@ ProxyPoolView ProxyPool::view(const ActiveCounts& active_counts) const {
     v.enabled = config_.enabled;
     v.max_bots_per_ip = config_.max_bots_per_ip;
     v.spread_mode = spread_mode_as_str(config_.spread_mode);
+    v.shuffle_selection = config_.shuffle_selection;
     v.total = config_.proxies.size();
 
     // proxies_text = join game entries' raw by "\n".
@@ -723,7 +772,8 @@ ProxyPoolView ProxyPool::view(const ActiveCounts& active_counts) const {
 }
 
 void ProxyPool::update(bool enabled, std::size_t max_bots_per_ip,
-                       const std::string& spread_mode, const std::string& proxies_text,
+                       const std::string& spread_mode, bool shuffle_selection,
+                       const std::string& proxies_text,
                        bool rotating_login_enabled, const std::string& rotating_login_scheme,
                        std::uint16_t rotating_login_port_span,
                        const std::string& rotating_login_proxy_text) {
@@ -731,6 +781,7 @@ void ProxyPool::update(bool enabled, std::size_t max_bots_per_ip,
     config_.enabled = enabled;
     config_.max_bots_per_ip = std::max<std::size_t>(max_bots_per_ip, 1);
     config_.spread_mode = spread_mode_from_str(spread_mode);
+    config_.shuffle_selection = shuffle_selection;
     config_.proxies = std::move(proxies);
     publish_game_pool(config_);
     config_.next_index = std::min(config_.next_index, config_.proxies.size());
@@ -786,7 +837,20 @@ std::optional<Socks5Config> ProxyPool::choose(const ActiveCounts& active_counts)
 
     std::size_t picked = 0;
     bool found = false;
-    if (config_.spread_mode == ProxySpreadMode::LeastLoaded) {
+    if (config_.shuffle_selection) {
+        std::vector<std::size_t> eligible;
+        eligible.reserve(candidates.size());
+        if (config_.spread_mode == ProxySpreadMode::LeastLoaded) {
+            std::size_t min_active = candidates[0].active;
+            for (const auto& c : candidates) min_active = std::min(min_active, c.active);
+            for (const auto& c : candidates)
+                if (c.active == min_active) eligible.push_back(c.index);
+        } else {
+            for (const auto& c : candidates) eligible.push_back(c.index);
+        }
+        picked = eligible[random_index(eligible.size())];
+        found = true;
+    } else if (config_.spread_mode == ProxySpreadMode::LeastLoaded) {
         std::size_t min_active = candidates[0].active;
         for (const auto& c : candidates) min_active = std::min(min_active, c.active);
         for (std::size_t offset = 0; offset < len; ++offset) {
@@ -827,7 +891,7 @@ std::optional<RotatingLoginProxy> ProxyPool::rotating_login_proxy() const {
         span = 1;
     }
     return RotatingLoginProxy(config_.rotating_login_proxies, span,
-                              config_.rotating_login_scheme);
+                              config_.rotating_login_scheme, config_.shuffle_selection);
 }
 
 std::string ProxyPool::rotating_login_label(const ProxyEntry& proxy) const {
@@ -849,4 +913,4 @@ void ProxyPool::save() const {
     out << j.dump(2);
 }
 
-}  // namespace adonai::proxy
+}  // namespace nxrth::proxy

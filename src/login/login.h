@@ -1,11 +1,8 @@
-// Adonai — GrowID login orchestration (ported from Mori login.rs + bot/auth.rs).
+// Nxrth — GrowID login orchestration (ported from Mori login.rs + bot/auth.rs).
 // See docs/port-specs/05-login.md.
 //
-// Turns (username, password) — or a raw token — into a Growtopia `ltoken`, a
-// server address and a `meta` string ready for the ENet logon packet. The
-// canonical NEWLY flow:
-//   server_data POST -> growid dashboard POST (22 fields) -> parse Growtopia href
-//     -> GET href (extract CSRF _token) -> growid/login/validate POST -> ltoken
+// Supports classic GrowID credentials, Google OAuth refresh-token records, and
+// provider-formatted gateway tokens.
 //
 // Token IP-binding (§7): when a rotating/bypass login proxy is configured, one
 // sticky SOCKS5 exit IP is minted; the HTTP token fetch runs through it AND the
@@ -19,11 +16,11 @@
 #include <optional>
 #include <string>
 
-#include "net/server_data.h"    // adonai::net::LoginInfo
-#include "net/socks5_udp.h"     // adonai::net::Socks5Config
-#include "proxy/proxy_pool.h"   // adonai::proxy::RotatingLoginProxy
+#include "net/server_data.h"    // nxrth::net::LoginInfo
+#include "net/socks5_udp.h"     // nxrth::net::Socks5Config
+#include "proxy/proxy_pool.h"   // nxrth::proxy::RotatingLoginProxy
 
-namespace adonai::login {
+namespace nxrth::login {
 
 // Per-bot logger sink (writes to the bot console / ImGui ring buffer).
 using LogFn = std::function<void(const std::string&)>;
@@ -62,9 +59,14 @@ struct LoginIdentity {
     std::string platform_id;
     std::string steam_token;
     std::string klv;
+    std::string vid;  // provider validate-token device id (naae build_protocol_body vid|)
 };
 
-// The identity defaults used by NEWLY (before per-account device overrides).
+// Secret-safe fingerprint for logs: "len=<n> sha=<first 12 hex of SHA-256>".
+// NEVER contains the raw value — the ONLY representation of a token allowed in logs.
+std::string token_fingerprint(const std::string& secret);
+
+// Default ENet identity used by credential-based login.
 LoginIdentity default_login_identity();
 
 // Overrides rid/mac/wk/hash/hash2/zf from the per-account device store and
@@ -73,7 +75,7 @@ LoginIdentity apply_account_device_identity(const std::string& username, LoginId
                                             const LogFn& log);
 
 // default_login_identity() + apply_account_device_identity(). Always Some.
-std::optional<LoginIdentity> newly_login_identity(const std::string& username, const LogFn& log);
+std::optional<LoginIdentity> login_identity(const std::string& username, const LogFn& log);
 
 // --- module output (§2.6) ----------------------------------------------------
 struct Credentials {
@@ -82,22 +84,21 @@ struct Credentials {
     std::string server;                  // game server host / IP
     std::uint16_t port = 0;              // game server port
     std::optional<LoginIdentity> identity;
-    // Pinned SOCKS5 exit IP the ltoken is bound to. The ENet host MUST be created
-    // with this config so the logon egresses from the same IP as the HTTP fetch.
-    std::optional<adonai::net::Socks5Config> bypass_enet;
+    // Pinned SOCKS5 exit shared by provider server_data and ENet.
+    std::optional<nxrth::net::Socks5Config> bypass_enet;
 };
 
 // --- login modes (§2.14) -----------------------------------------------------
 enum class LoginMethodKind {
     Legacy,  // classic GrowID (platformID 0,1,1)
-    Newly,   // current 5.51 GrowID (Adonai-style) — PRIMARY
-    Ltoken,  // token supplied directly; no fallback on refresh
+    Ltoken,  // Google OAuth refresh token validated through checktoken
+    ProviderLtoken,  // provider gateway token sent through a pinned exit
 };
 
 struct LoginMethod {
-    LoginMethodKind kind = LoginMethodKind::Newly;
-    std::string password;  // Legacy / Newly
-    std::string token;     // Ltoken (direct)
+    LoginMethodKind kind = LoginMethodKind::Legacy;
+    std::string password;      // Legacy only
+    std::string source_token;  // Ltoken/ProviderLtoken: original refresh token for re-exchange
 };
 
 // --- token fetch (§4.1) ------------------------------------------------------
@@ -114,25 +115,21 @@ LoginTokenResult get_legacy_token_proxied(const std::string& url, const std::str
                                           const std::string& password,
                                           const std::optional<std::string>& proxy_url);
 
+// Exchange/validate a Google OAuth refresh token through Growtopia's checktoken
+// endpoint. The proxy must use the same egress as the ENet gateway login.
+LoginTokenResult check_token(const std::string& refresh_token,
+                             const std::string& client_data,
+                             const std::optional<std::string>& proxy_url);
+
 // input[name='_token'] value from the login page HTML.
 std::optional<std::string> extract_csrf_token(const std::string& html);
 
-// --- orchestration (§4.5) ----------------------------------------------------
-// The primary path. Loops (5s between full retry rounds), polling `stop` at each
-// candidate. `proxy` = assigned game proxy (world traffic); `login_proxy` = the
-// rotating/bypass login proxy that pins the logon IP. Returns std::nullopt when
-// stopped or on a terminal error (Exhausted / WrongCredentials set stop=true).
-std::optional<Credentials> fetch_newly_credentials(
-    const std::string& username, const std::string& password,
-    const std::optional<adonai::net::Socks5Config>& proxy,
-    const std::optional<adonai::proxy::RotatingLoginProxy>& login_proxy, std::atomic<bool>& stop,
-    const LogFn& log);
-
-// Legacy GrowID flow (platformID 0,1,1). No HAR fallbacks in Adonai.
+// --- orchestration -----------------------------------------------------------
+// Legacy GrowID flow (platformID 0,1,1). No HAR fallbacks in Nxrth.
 std::optional<Credentials> fetch_credentials(
     const std::string& username, const std::string& password,
-    const std::optional<adonai::net::Socks5Config>& proxy,
-    const std::optional<adonai::proxy::RotatingLoginProxy>& login_proxy, std::atomic<bool>& stop,
+    const std::optional<nxrth::net::Socks5Config>& proxy,
+    const std::optional<nxrth::proxy::RotatingLoginProxy>& login_proxy, std::atomic<bool>& stop,
     const LogFn& log);
 
 // --- fleet pacing gates (§8) -------------------------------------------------
@@ -141,4 +138,4 @@ void pace_dashboard();
 // Fleet-wide gate wrapping the whole HTTP re-login (2500ms spacing, 5-min horizon).
 void pace_http_login();
 
-}  // namespace adonai::login
+}  // namespace nxrth::login

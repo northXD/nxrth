@@ -5,7 +5,7 @@
 
 #include "core/cursor.h"
 
-namespace adonai::protocol {
+namespace nxrth::protocol {
 
 namespace {
 
@@ -209,4 +209,4 @@ const Variant* VariantList::get(std::size_t index) const {
     return &variants[index];
 }
 
-}  // namespace adonai::protocol
+}  // namespace nxrth::protocol

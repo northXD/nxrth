@@ -1,14 +1,19 @@
-// Adonai — Growtopia login crypto (ported from Mori/protocol/crypto.rs).
+// Nxrth — Growtopia login crypto (ported from Mori/protocol/crypto.rs).
 // KLV computation + GT rotate-left-5 hash. Uppercase MD5 hex is mandatory.
 #pragma once
 #include <cstdint>
 #include <string>
 #include <string_view>
 
-namespace adonai::protocol {
+namespace nxrth::protocol {
 
 // MD5 of s, formatted as UPPERCASE hex (32 chars, no separators).
 std::string md5u(std::string_view s);
+
+// SHA-256 of s, formatted as lowercase hex (64 chars, no separators). Used ONLY
+// for secret-safe log fingerprints (never to derive wire values) — see
+// nxrth::login::token_fingerprint.
+std::string sha256_hex(std::string_view s);
 
 // GT rotate-left-5 hash, NUL-terminated variant.
 // Seed 0x55555555; h = rotl(h,5) + b over each byte then one trailing 0x00;
@@ -31,4 +36,4 @@ std::string random_mac();
 // == random_hex(32) — 32 uppercase hex chars.
 std::string generate_rid();
 
-}  // namespace adonai::protocol
+}  // namespace nxrth::protocol

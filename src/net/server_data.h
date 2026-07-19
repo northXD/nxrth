@@ -1,4 +1,4 @@
-// Adonai — server_data.php fetch + parse (ported from Mori server_data.rs).
+// Nxrth — server_data.php fetch + parse (ported from Mori server_data.rs).
 //
 // An HTTPS POST to Growtopia's server_data.php (growtopia1 primary / growtopia2
 // alternate) that returns a pipe-delimited key/value blob describing the game
@@ -16,7 +16,7 @@
 #include <optional>
 #include <string>
 
-namespace adonai::net {
+namespace nxrth::net {
 
 // Login parameters for the POST body. Growtopia wire keys (do not rename).
 struct LoginInfo {
@@ -81,4 +81,4 @@ ServerDataResult get_server_data_proxied(bool alternate, const LoginInfo& login_
 ServerDataResult get_server_data_proxied_live(bool alternate, const LoginInfo& login_info,
                                               const std::optional<std::string>& proxy_url);
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

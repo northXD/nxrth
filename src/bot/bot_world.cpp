@@ -1,4 +1,4 @@
-// Adonai — the IN-WORLD / AUTOMATION half of the Bot engine (port spec 08).
+// Nxrth — the IN-WORLD / AUTOMATION half of the Bot engine (port spec 08).
 // Implements the in-world GameUpdate handlers (world load, tiles, objects,
 // inventory), the geiger hooks, all action helpers (say/warp/place/walk/
 // pathfind/collect/…), the native fleet-aware automation seam, and the per-tick
@@ -21,13 +21,13 @@
 #include "bot/bot.h"
 #include "core/logger.h"
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 namespace {
 
-using adonai::protocol::GameUpdatePacket;
-using GPT = adonai::protocol::GamePacketType;
-namespace PF = adonai::protocol::PacketFlags;
+using nxrth::protocol::GameUpdatePacket;
+using GPT = nxrth::protocol::GamePacketType;
+namespace PF = nxrth::protocol::PacketFlags;
 
 // Toggle a flag bit in the raw u32 flags word (mirrors Rust bitflags .set).
 inline void set_flag(std::uint32_t& flags, std::uint32_t bit, bool on) {
@@ -72,7 +72,7 @@ void Bot::load_world(const GameUpdatePacket& pkt) {
     local_ = LocalPlayer{};
     geiger_green_repeat_.reset();
 
-    auto parsed = adonai::world::World::try_parse(pkt.extra_data.data(), pkt.extra_data.size());
+    auto parsed = nxrth::world::World::try_parse(pkt.extra_data.data(), pkt.extra_data.size());
     if (!parsed) {
         log_console("[Bot] World parse error");
         return;
@@ -148,13 +148,13 @@ void Bot::on_tile_change(const GameUpdatePacket& pkt) {
     auto x = static_cast<std::uint32_t>(pkt.int_x);
     auto y = static_cast<std::uint32_t>(pkt.int_y);
     auto item_id = static_cast<std::uint16_t>(pkt.value);
-    adonai::world::Tile* tile = world_->get_tile_mut(x, y);
+    nxrth::world::Tile* tile = world_->get_tile_mut(x, y);
     if (!tile) return;
 
     if (item_id == 18) {  // fist / punch — break fg first, else bg
         if (tile->fg_item_id != 0) {
             tile->fg_item_id = 0;
-            tile->tile_type = adonai::world::tiletype::Basic{};
+            tile->tile_type = nxrth::world::tiletype::Basic{};
         } else {
             tile->bg_item_id = 0;
         }
@@ -162,7 +162,7 @@ void Bot::on_tile_change(const GameUpdatePacket& pkt) {
         tile->fg_item_id = item_id;
     }
     std::uint16_t fg = tile->fg_item_id, bg = tile->bg_item_id;
-    std::size_t idx = adonai::world::tile_index(x, y, world_->tile_map.width);
+    std::size_t idx = nxrth::world::tile_index(x, y, world_->tile_map.width);
     state_->write([&](BotState& s) {
         if (idx < s.tiles.size()) {
             s.tiles[idx].fg_item_id = fg;
@@ -184,7 +184,7 @@ void Bot::on_send_tile_update_data(const GameUpdatePacket& pkt) {
     auto res = world_->update_tile_from_bytes(x, y, pkt.extra_data.data(), pkt.extra_data.size());
     if (!res) return;
     std::uint16_t fg = res->first, bg = res->second;
-    std::size_t idx = adonai::world::tile_index(x, y, world_->tile_map.width);
+    std::size_t idx = nxrth::world::tile_index(x, y, world_->tile_map.width);
     state_->write([&](BotState& s) {
         if (idx < s.tiles.size()) {
             s.tiles[idx].fg_item_id = fg;
@@ -214,7 +214,7 @@ void Bot::on_send_tile_update_data_multiple(const GameUpdatePacket& pkt) {
         auto res = world_->update_tile_from_bytes(x, y, tile_data, tile_len);
         if (res) {
             std::uint16_t fg = res->first, bg = res->second;
-            std::size_t idx = adonai::world::tile_index(x, y, width);
+            std::size_t idx = nxrth::world::tile_index(x, y, width);
             state_->write([&](BotState& s) {
                 if (idx < s.tiles.size()) {
                     s.tiles[idx].fg_item_id = fg;
@@ -235,12 +235,12 @@ void Bot::on_send_tile_tree_state(const GameUpdatePacket& pkt) {
     if (!world_) return;
     auto x = static_cast<std::uint32_t>(pkt.int_x);
     auto y = static_cast<std::uint32_t>(pkt.int_y);
-    adonai::world::Tile* tile = world_->get_tile_mut(x, y);
+    nxrth::world::Tile* tile = world_->get_tile_mut(x, y);
     if (!tile) return;
     tile->fg_item_id = 0;
-    tile->tile_type = adonai::world::tiletype::Basic{};
+    tile->tile_type = nxrth::world::tiletype::Basic{};
     std::uint16_t bg = tile->bg_item_id;
-    std::size_t idx = adonai::world::tile_index(x, y, world_->tile_map.width);
+    std::size_t idx = nxrth::world::tile_index(x, y, world_->tile_map.width);
     state_->write([&](BotState& s) {
         if (idx < s.tiles.size()) s.tiles[idx].fg_item_id = 0;
     });
@@ -309,7 +309,7 @@ void Bot::on_item_change_object(const GameUpdatePacket& pkt) {
     };
 
     if (pkt.net_id == 0xFFFFFFFFu) {  // new drop
-        adonai::world::WorldObject o;
+        nxrth::world::WorldObject o;
         o.item_id = static_cast<std::uint16_t>(pkt.value);
         o.x = std::ceil(pkt.vector_x);
         o.y = std::ceil(pkt.vector_y);
@@ -336,9 +336,9 @@ void Bot::on_item_change_object(const GameUpdatePacket& pkt) {
 
     if (pkt.net_id > 0) {  // collected (by uid == pkt.value)
         auto it = std::find_if(world_->objects.begin(), world_->objects.end(),
-                               [&](const adonai::world::WorldObject& o) { return o.uid == pkt.value; });
+                               [&](const nxrth::world::WorldObject& o) { return o.uid == pkt.value; });
         if (it == world_->objects.end()) return;
-        adonai::world::WorldObject item = *it;
+        nxrth::world::WorldObject item = *it;
         world_->objects.erase(it);
         rebuild_objects();
         if (pkt.net_id == local_.net_id) {  // we collected it
@@ -364,10 +364,10 @@ void Bot::on_send_lock(const GameUpdatePacket& pkt) {
     auto x = static_cast<std::uint32_t>(pkt.int_x);
     auto y = static_cast<std::uint32_t>(pkt.int_y);
     auto fg = static_cast<std::uint16_t>(pkt.value);
-    adonai::world::Tile* tile = world_->get_tile_mut(x, y);
+    nxrth::world::Tile* tile = world_->get_tile_mut(x, y);
     if (!tile) return;
     tile->fg_item_id = fg;
-    std::size_t idx = adonai::world::tile_index(x, y, world_->tile_map.width);
+    std::size_t idx = nxrth::world::tile_index(x, y, world_->tile_map.width);
     state_->write([&](BotState& s) {
         if (idx < s.tiles.size()) s.tiles[idx].fg_item_id = fg;
     });
@@ -495,7 +495,7 @@ void Bot::set_direction(bool facing_left) {
 std::vector<std::pair<std::uint16_t, std::uint8_t>> Bot::build_collision_grid(
     bool item_collect) const {
     if (!world_) return {};
-    return adonai::world::build_collision_tiles(*world_, *items_dat_, item_collect);
+    return nxrth::world::build_collision_tiles(*world_, *items_dat_, item_collect);
 }
 
 void Bot::find_path(std::uint32_t x, std::uint32_t y) {
@@ -510,8 +510,8 @@ void Bot::find_path(std::uint32_t x, std::uint32_t y) {
         std::uint32_t w = world_->tile_map.width, h = world_->tile_map.height;
         astar_.update_from_tiles(w, h, tiles);
 
-        std::uint32_t from_x = adonai::world::pixel_to_tile(pos_x_);
-        std::uint32_t from_y = adonai::world::pixel_to_tile(pos_y_);
+        std::uint32_t from_x = nxrth::world::pixel_to_tile(pos_x_);
+        std::uint32_t from_y = nxrth::world::pixel_to_tile(pos_y_);
         bool acc = has_access();
         auto [goal_x, goal_y] = *pathfind_target_;
         if (from_x == goal_x && from_y == goal_y) {
@@ -525,8 +525,8 @@ void Bot::find_path(std::uint32_t x, std::uint32_t y) {
         }
         pathfind_recalc_ = false;
         for (const auto& node : *path) {
-            std::uint32_t cx = adonai::world::pixel_to_tile(pos_x_);
-            std::uint32_t cy = adonai::world::pixel_to_tile(pos_y_);
+            std::uint32_t cx = nxrth::world::pixel_to_tile(pos_x_);
+            std::uint32_t cy = nxrth::world::pixel_to_tile(pos_y_);
             if (node.x == cx && node.y == cy) continue;
             walk(static_cast<std::int32_t>(node.x), static_cast<std::int32_t>(node.y));
             if (pathfind_recalc_) break;  // server corrected our position
@@ -560,8 +560,8 @@ std::vector<std::pair<std::uint32_t, std::uint32_t>> Bot::compute_path(std::uint
     auto tiles = build_collision_grid(/*item_collect=*/true);  // Lock -> 3
     std::uint32_t w = world_->tile_map.width, h = world_->tile_map.height;
     astar_.update_from_tiles(w, h, tiles);
-    std::uint32_t from_x = adonai::world::pixel_to_tile(pos_x_);
-    std::uint32_t from_y = adonai::world::pixel_to_tile(pos_y_);
+    std::uint32_t from_x = nxrth::world::pixel_to_tile(pos_x_);
+    std::uint32_t from_y = nxrth::world::pixel_to_tile(pos_y_);
     auto path = astar_.find_path(from_x, from_y, x, y, has_access());
     if (!path) return out;
     out.reserve(path->size());
@@ -576,8 +576,8 @@ void Bot::place(std::int32_t offset_x, std::int32_t offset_y, std::uint32_t item
                 bool is_punch) {
     if (!is_punch && !inventory_.has_item(static_cast<std::uint16_t>(item_id), 1)) return;
 
-    std::int32_t base_x = adonai::world::pixel_to_tile_floor(pos_x_);
-    std::int32_t base_y = adonai::world::pixel_to_tile_floor(pos_y_);
+    std::int32_t base_x = nxrth::world::pixel_to_tile_floor(pos_x_);
+    std::int32_t base_y = nxrth::world::pixel_to_tile_floor(pos_y_);
     std::int32_t tile_x = base_x + offset_x;
     std::int32_t tile_y = base_y + offset_y;
     if (std::abs(tile_x - base_x) > 4 || std::abs(tile_y - base_y) > 4) return;  // ±4 reach
@@ -608,8 +608,8 @@ void Bot::punch(std::int32_t ox, std::int32_t oy) { place(ox, oy, 18, /*is_punch
 void Bot::wrench(std::int32_t ox, std::int32_t oy) { place(ox, oy, 32, /*is_punch=*/false); }
 
 void Bot::wrench_at(std::int32_t tile_x, std::int32_t tile_y) {
-    std::int32_t base_x = adonai::world::pixel_to_tile_floor(pos_x_);
-    std::int32_t base_y = adonai::world::pixel_to_tile_floor(pos_y_);
+    std::int32_t base_x = nxrth::world::pixel_to_tile_floor(pos_x_);
+    std::int32_t base_y = nxrth::world::pixel_to_tile_floor(pos_y_);
     wrench(tile_x - base_x, tile_y - base_y);
 }
 
@@ -742,12 +742,12 @@ void Bot::reconnect() { reconnect_main(/*refresh_token=*/false); }
 // ===========================================================================
 bool Bot::has_access() const {
     if (!world_) return false;
-    return adonai::world::world_has_access(*world_, local_.user_id);
+    return nxrth::world::world_has_access(*world_, local_.user_id);
 }
 
 void Bot::collect_object_at(std::uint32_t uid, float range_tiles) {
     if (!world_) return;
-    const adonai::world::WorldObject* found = nullptr;
+    const nxrth::world::WorldObject* found = nullptr;
     for (const auto& o : world_->objects) {
         if (o.uid == uid) {
             found = &o;
@@ -792,16 +792,16 @@ std::size_t Bot::collect() {
 
     auto tiles = build_collision_grid(/*item_collect=*/true);
     astar_.update_from_tiles(world_->tile_map.width, world_->tile_map.height, tiles);
-    std::uint32_t from_x = adonai::world::pixel_to_tile(pos_x_);
-    std::uint32_t from_y = adonai::world::pixel_to_tile(pos_y_);
+    std::uint32_t from_x = nxrth::world::pixel_to_tile(pos_x_);
+    std::uint32_t from_y = nxrth::world::pixel_to_tile(pos_y_);
     bool acc = has_access();
 
     std::size_t sent = 0;
     std::size_t limit = std::min<std::size_t>(nearby.size(), COLLECT_MAX_PER_TICK);
     for (std::size_t i = 0; i < limit; ++i) {
         const Near& n = nearby[i];
-        std::uint32_t tx = adonai::world::pixel_to_tile(n.x);
-        std::uint32_t ty = adonai::world::pixel_to_tile(n.y);
+        std::uint32_t tx = nxrth::world::pixel_to_tile(n.x);
+        std::uint32_t ty = nxrth::world::pixel_to_tile(n.y);
         if (!astar_.find_path(from_x, from_y, tx, ty, acc)) continue;  // unreachable
 
         bool can_collect;
@@ -834,4 +834,4 @@ void Bot::set_auto_collect(bool enabled) {
     notify_dirty();
 }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

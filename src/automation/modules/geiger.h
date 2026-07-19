@@ -1,4 +1,4 @@
-// Adonai - geiger farming automation module (fleet-coordinated).
+// Nxrth - geiger farming automation module (fleet-coordinated).
 //
 // Native C++ port of Mori's web-UI-generated geiger Lua farm (Mori-2.0.0
 // AutomationsPage buildGeigerScript). The SEARCH is candidate-elimination /
@@ -30,18 +30,18 @@
 #include <utility>
 #include <vector>
 
-#include "bot/bot.h"          // adonai::bot::{AutomationModule, BotContext, GeigerArea}
-#include "bot/bot_state.h"    // adonai::bot::GeigerArea / GeigerSignal
-#include "bot/fleet_state.h"  // adonai::bot::FleetState
-#include "world/inventory.h"  // adonai::world::Inventory
+#include "bot/bot.h"          // nxrth::bot::{AutomationModule, BotContext, GeigerArea}
+#include "bot/bot_state.h"    // nxrth::bot::GeigerArea / GeigerSignal
+#include "bot/fleet_state.h"  // nxrth::bot::FleetState
+#include "world/inventory.h"  // nxrth::world::Inventory
 
-namespace adonai::automation {
+namespace nxrth::automation {
 
 // ---------------------------------------------------------------------------
 // GeigerModule - coordinated geiger prize farming with candidate-elimination
 // search.
 //
-// Config (AutomationConfig params, read each tick via config_snapshot):
+// Config (shared immutable AutomationConfig; parsed world lists are cached):
 //   enabled["geiger"]             = true  -> module runs (gated by run_automation)
 //   params["geiger_hunt_worlds"]  = "WORLDA, WORLDB:door"  hunt/search worlds (fleet-spread)
 //   params["geiger_depot_worlds"] = "DEPOT1, DEPOT2"       drop loot here when full
@@ -60,20 +60,21 @@ namespace adonai::automation {
 //   params["geiger_pickup_scan_ms"]= "3000"               empty pickup-depot scan interval
 //   params["geiger_pickup_empty_scans"]= "12"             scans before rotating depot
 // ---------------------------------------------------------------------------
-class GeigerModule : public adonai::bot::AutomationModule {
+class GeigerModule : public nxrth::bot::AutomationModule {
 public:
     static constexpr const char* kName = "geiger";
 
     const char* name() const override { return kName; }
-    void on_enabled(adonai::bot::BotContext& self,
-                    adonai::bot::FleetState& fleet) override;
-    void on_disabled(adonai::bot::BotContext& self,
-                     adonai::bot::FleetState& fleet) override;
-    void tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) override;
+    void on_enabled(nxrth::bot::BotContext& self,
+                    nxrth::bot::FleetState& fleet) override;
+    void on_disabled(nxrth::bot::BotContext& self,
+                     nxrth::bot::FleetState& fleet) override;
+    void tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+              const nxrth::bot::AutomationConfig& config) override;
 
 private:
     using Clock = std::chrono::steady_clock;
-    using GeigerArea = adonai::bot::GeigerArea;
+    using GeigerArea = nxrth::bot::GeigerArea;
 
     // A tile the prize could be on / a probe location.
     struct Point {
@@ -91,20 +92,20 @@ private:
     enum class DoorCheck { Verified, Cautious, Mismatch };
 
     // ---- world/warp/claim plumbing (unchanged from the working farm loop) ----
-    void release_claim(adonai::bot::FleetState& fleet);
-    void release_pickup_claim(adonai::bot::FleetState& fleet);
-    bool warp_towards(adonai::bot::BotContext& self, const std::string& cur,
+    void release_claim(nxrth::bot::FleetState& fleet);
+    void release_pickup_claim(nxrth::bot::FleetState& fleet);
+    bool warp_towards(nxrth::bot::BotContext& self, const std::string& cur,
                        const std::pair<std::string, std::string>& target);
-    DoorCheck check_target_door(adonai::bot::BotContext& self,
+    DoorCheck check_target_door(nxrth::bot::BotContext& self,
                                 const std::pair<std::string, std::string>& target) const;
-    bool refresh_hunt_world(adonai::bot::BotContext& self,
+    bool refresh_hunt_world(nxrth::bot::BotContext& self,
                             const std::pair<std::string, std::string>& target,
                             const std::string& reason);
     // Force auto-collect OFF around a depot deposit (so the bot doesn't re-vacuum
     // its own drops / everything on the depot ground) and restore the user's value
     // once hunting resumes. Idempotent.
-    void suppress_collect(adonai::bot::BotContext& self);
-    void restore_collect(adonai::bot::BotContext& self);
+    void suppress_collect(nxrth::bot::BotContext& self);
+    void restore_collect(nxrth::bot::BotContext& self);
     // Blocking deposit at the CURRENT world: for each (id -> keep_count) in `plan`
     // drop the whole (held - keep) via the reliable 2-step drop_item, VERIFYING the
     // stack actually left the pack (inventory count fell) and hopping to a walkable
@@ -112,36 +113,37 @@ private:
     // between drops (keeps ENet serviced). Mirrors Mori's rotation.dropExcess loop.
     // Early-aborts if nothing drops across several tiles (a no-drop-access world:
     // stops the "Cant place tile" spam). Returns the number of stacks it dropped.
-    std::uint32_t run_deposit(adonai::bot::BotContext& self,
+    std::uint32_t run_deposit(nxrth::bot::BotContext& self,
                               const std::unordered_map<std::uint16_t, std::uint32_t>& plan);
     // Walk one tile to a walkable neighbour (direction rotated by `seq`) so drops
     // don't pile past the per-tile limit. false if no empty neighbour tile.
-    bool hop_to_neighbour_tile(adonai::bot::BotContext& self, int seq);
+    bool hop_to_neighbour_tile(nxrth::bot::BotContext& self, int seq);
     // Prize-only drop plan: every held geiger PRIZE id mapped to keep-count 0 (drop
     // all of it), never the counters or the account's own items.
     std::unordered_map<std::uint16_t, std::uint32_t> build_prize_plan(
-        const adonai::world::Inventory& inv, std::uint16_t item) const;
-    bool try_pickup_counter(adonai::bot::BotContext& self, std::uint16_t item,
+        const nxrth::world::Inventory& inv, std::uint16_t item) const;
+    bool try_pickup_counter(nxrth::bot::BotContext& self, std::uint16_t item,
                             std::uint64_t scan_ms, int empty_scan_limit);
 
     // ---- candidate-elimination search (ported from Mori) ---------------------
     void reset_hunt_state();
-    void reset_candidates(adonai::bot::BotContext& self, int min_y, int max_y_cap, int width_cap);
+    void reset_candidates(nxrth::bot::BotContext& self, int min_y, int max_y_cap, int width_cap);
     void fill_candidate_grid();  // rebuild candidates_ from the stored grid bounds
     void apply_observation(const Obs& obs, bool rebased = false);
     Point choose_probe(const std::optional<Obs>& focus);
     double score_probe(const Point& p, const Obs& focus) const;
     std::vector<Point> build_probe_points(const Point& anchor, GeigerArea sig) const;
     Point candidate_centroid() const;
-    bool detect_prize_fallback(const adonai::world::Inventory& inv, std::uint16_t item) const;
+    bool detect_prize_fallback(const nxrth::world::Inventory& inv, std::uint16_t item) const;
     // Resolve the geiger PRIZE item ids (from a built-in name list via items.dat +
     // the optional "geiger_drop_ids" config param) so the deposit drops ONLY those,
     // never the account's other inventory. Built once when items.dat is available.
-    void build_drop_ids(adonai::bot::BotContext& self, const adonai::bot::AutomationConfig& cfg);
-    void on_prize(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet, int recharge_min);
+    void build_drop_ids(nxrth::bot::BotContext& self, const nxrth::bot::AutomationConfig& cfg);
+    void on_prize(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet, int recharge_min);
     // Build + send the fleet geiger webhook (Discord embed with fleet-wide totals
     // + this find's gained loot). Edits one shared message; no-op if url empty.
-    void send_geiger_webhook(adonai::bot::BotContext& self, const std::string& url,
+    void send_geiger_webhook(nxrth::bot::BotContext& self,
+                             nxrth::bot::FleetState& fleet, const std::string& url,
                              const std::string& username, const std::string& world,
                              const std::unordered_map<std::uint16_t, std::uint32_t>& gained,
                              std::uint32_t px, std::uint32_t py) const;
@@ -168,7 +170,7 @@ private:
     int steps_this_hunt_ = 0;                                // per-hunt probe budget
     std::uint32_t base_charged_ = 0;                         // counter count at hunt start
     std::uint32_t base_dead_ = 0;                            // dead-counter count at hunt start
-    std::unordered_map<std::uint16_t, adonai::world::InventoryItem> base_inv_;  // inv at hunt start
+    std::unordered_map<std::uint16_t, nxrth::world::InventoryItem> base_inv_;  // inv at hunt start
     bool pending_deposit_ = false;  // after a find: deposit loot before idling out the recharge
     bool collect_off_ = false;      // we forced auto-collect off for a deposit
     bool collect_saved_ = true;     // the user's auto-collect value to restore after
@@ -180,7 +182,12 @@ private:
     int pickup_empty_scans_ = 0;
     Clock::time_point pickup_next_scan_{};
     Clock::time_point pickup_retry_after_{};
+    std::string hunt_worlds_param_;
+    std::string depot_worlds_param_;
     std::string pickup_worlds_param_;
+    std::vector<std::pair<std::string, std::string>> hunt_worlds_;
+    std::vector<std::pair<std::string, std::string>> depot_worlds_;
+    std::vector<std::pair<std::string, std::string>> pickup_worlds_;
     std::uint32_t logged_extra_charged_ = 0;
     std::uint32_t logged_extra_dead_ = 0;
     int counter_deposit_fails_ = 0;                 // consecutive zero-progress counter deposits
@@ -194,4 +201,4 @@ private:
     int grid_width_ = 100;
 };
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

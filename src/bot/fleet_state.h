@@ -1,7 +1,7 @@
-// Adonai — FleetState: the SHARED, mutex-guarded fleet registry that makes
+// Nxrth — FleetState: the SHARED, mutex-guarded fleet registry that makes
 // automation fleet-aware (ARCHITECTURE "FleetState + in-engine automation";
 // port spec 09 §5.3). One instance owned by the BotManager, a std::shared_ptr
-// handed to every bot. Every bot publishes its own compact view each tick and
+// handed to every bot. Every bot publishes its own compact view periodically and
 // can read every other bot, claim shared targets (no double-work), and consult
 // shared world knowledge.
 //
@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -19,7 +20,7 @@
 
 #include "bot/bot_state.h"  // BotStatus
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 // A compact, copyable snapshot of one bot — what every other bot can see.
 struct BotView {
@@ -107,8 +108,12 @@ public:
     void upsert_world(const WorldShare& w);
     std::optional<WorldShare> get_world(const std::string& name) const;
 
-    // --- automation config (copied in/out; short critical section) -----------
+    // --- automation config ---------------------------------------------------
+    // UI/MCP callers can request a value snapshot. Hot bot loops retain an
+    // immutable shared handle, so config maps/strings are copied only when the
+    // user actually changes the config.
     AutomationConfig config_snapshot() const;
+    std::shared_ptr<const AutomationConfig> config_handle() const;
     void set_config(AutomationConfig cfg);
 
 private:
@@ -116,9 +121,9 @@ private:
     std::unordered_map<std::uint32_t, BotView> members_;
     std::unordered_map<std::string, std::uint32_t> claims_;
     std::unordered_map<std::string, WorldShare> worlds_;
-    AutomationConfig config_;
+    std::shared_ptr<const AutomationConfig> config_ = std::make_shared<AutomationConfig>();
 };
 
 using FleetHandle = std::shared_ptr<FleetState>;
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

@@ -1,4 +1,4 @@
-// Adonai — Growtopia items.dat binary parser (ported from Mori/items.rs).
+// Nxrth — Growtopia items.dat binary parser (ported from Mori/items.rs).
 // Read-only item metadata DB, loaded once at startup and shared fleet-wide as
 // std::shared_ptr<const ItemsDat>. GT is little-endian throughout.
 #pragma once
@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace adonai::world {
+namespace nxrth::world {
 
 // items.dat name-decryption XOR key: "PBG892FXX982ABC*" (16 bytes).
 inline constexpr std::string_view ITEMS_XOR_KEY = "PBG892FXX982ABC*";
@@ -85,4 +85,4 @@ struct ItemsDat {
     static ItemsDat load();
 };
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

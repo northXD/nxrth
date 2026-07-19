@@ -1,4 +1,4 @@
-// Adonai — the per-bot engine: FULL class declaration (port specs 06/07/08).
+// Nxrth — the per-bot engine: FULL class declaration (port specs 06/07/08).
 // The three impl units (bot_core_state.cpp = connect/reconnect/gates,
 // bot_core_handlers.cpp = service_once/packet dispatch/login packets,
 // bot_core_automation.cpp = in-world handlers/collect/geiger/actions) implement
@@ -30,20 +30,20 @@
 #include "bot/bot_state.h"
 #include "bot/fleet_state.h"
 #include "bot/gates.h"
-#include "login/login.h"       // adonai::login::{Credentials, LoginIdentity, LoginMethod, LoginMethodKind}
-#include "net/enet_host.h"     // adonai::net::{BotHost, PeerId, HostEvent}
-#include "net/socks5_udp.h"    // adonai::net::Socks5Config
-#include "protocol/packet.h"   // adonai::protocol::{GameUpdatePacket, IncomingPacket, GamePacketType}
-#include "protocol/variant.h"  // adonai::protocol::VariantList
-#include "proxy/proxy_pool.h"  // adonai::proxy::{RotatingLoginProxy, next_game_proxy}
+#include "login/login.h"       // nxrth::login::{Credentials, LoginIdentity, LoginMethod, LoginMethodKind}
+#include "net/enet_host.h"     // nxrth::net::{BotHost, PeerId, HostEvent}
+#include "net/socks5_udp.h"    // nxrth::net::Socks5Config
+#include "protocol/packet.h"   // nxrth::protocol::{GameUpdatePacket, IncomingPacket, GamePacketType}
+#include "protocol/variant.h"  // nxrth::protocol::VariantList
+#include "proxy/proxy_pool.h"  // nxrth::proxy::{RotatingLoginProxy, next_game_proxy}
 #include "world/inventory.h"
 #include "world/items.h"
 #include "world/pathfind.h"
 #include "world/world.h"
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
-using Socks5Config = adonai::net::Socks5Config;
+using Socks5Config = nxrth::net::Socks5Config;
 
 // ---------------------------------------------------------------------------
 // Bot-core constants NOT owned by gates.h (spec 06 §1.1, 08 §12).
@@ -109,7 +109,8 @@ struct AutomationModule {
     virtual const char* name() const = 0;
     virtual void on_enabled(BotContext&, FleetState&) {}
     virtual void on_disabled(BotContext&, FleetState&) {}
-    virtual void tick(BotContext& self, FleetState& fleet) = 0;
+    virtual void tick(BotContext& self, FleetState& fleet,
+                      const AutomationConfig& config) = 0;
 };
 
 // ===========================================================================
@@ -123,24 +124,16 @@ public:
     static std::unique_ptr<Bot> create(
         const std::string& username, const std::string& password,
         std::optional<Socks5Config> proxy,
-        std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
+        std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
         std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-        CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
-        std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet);
-
-    static std::unique_ptr<Bot> create_newly(
-        const std::string& username, const std::string& password,
-        std::optional<Socks5Config> proxy,
-        std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
-        std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-        CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
+        CmdReceiver cmd_rx, std::shared_ptr<const nxrth::world::ItemsDat> items_dat,
         std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet);
 
     static std::unique_ptr<Bot> create_ltoken(
         const std::string& ltoken_str, std::optional<Socks5Config> proxy,
-        std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
+        std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
         std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-        CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
+        CmdReceiver cmd_rx, std::shared_ptr<const nxrth::world::ItemsDat> items_dat,
         std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet);
 
     ~Bot();
@@ -197,12 +190,12 @@ public:
 
     // --- read-only accessors automation/queries use directly -----------------
     std::uint32_t bot_id() const { return bot_id_; }
-    const std::optional<adonai::world::World>& world() const { return world_; }
+    const std::optional<nxrth::world::World>& world() const { return world_; }
     const std::unordered_map<std::uint32_t, Player>& players() const { return players_; }
-    const adonai::world::Inventory& inventory() const { return inventory_; }
+    const nxrth::world::Inventory& inventory() const { return inventory_; }
     // Shared item DB (names for ids); may be null. Used by automation (e.g. the
     // geiger webhook) to print item names instead of raw ids.
-    const adonai::world::ItemsDat* items_dat() const { return items_dat_.get(); }
+    const nxrth::world::ItemsDat* items_dat() const { return items_dat_.get(); }
     // Current auto-collect flag (so automation can save/restore it around a deposit).
     bool auto_collect() const { return auto_collect_; }
     float pos_x() const { return pos_x_; }
@@ -212,7 +205,8 @@ public:
     // Current geiger reading (from the shared state the geiger handlers publish).
     // Used by the native GeigerModule to drive fleet-coordinated farming.
     std::optional<GeigerSignal> geiger_signal() const {
-        return state_ ? state_->snapshot().geiger_signal : std::nullopt;
+        return state_ ? state_->read([](const BotState& s) { return s.geiger_signal; })
+                      : std::nullopt;
     }
     // Block (KEEPING ENET SERVICED) until a geiger particle newer than
     // `newer_than_ms` (compare GeigerSignal.timestamp_ms) is published, or
@@ -224,11 +218,11 @@ public:
 
 private:
     // Private full constructor (all constructors funnel here after fetch).
-    Bot(std::string username, adonai::login::LoginMethod login_method,
-        adonai::login::Credentials creds, std::optional<Socks5Config> proxy,
-        std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
+    Bot(std::string username, nxrth::login::LoginMethod login_method,
+        nxrth::login::Credentials creds, std::optional<Socks5Config> proxy,
+        std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
         std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-        CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
+        CmdReceiver cmd_rx, std::shared_ptr<const nxrth::world::ItemsDat> items_dat,
         std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet);
 
     // ==== §2.7-§2.8 loop internals ==========================================
@@ -240,7 +234,7 @@ private:
     void publish_fleet_view();           // upsert this bot's BotView each tick
 
     // ==== ENet host + connect/reconnect (bot_core_state.cpp) =================
-    adonai::net::BotHost create_host(const Socks5Config* proxy);  // logs + BotHost::create
+    nxrth::net::BotHost create_host(const Socks5Config* proxy);  // logs + BotHost::create
     void reconnect_main(bool refresh_token);
     // Quarantine the current post-logon exit IP (rate-limited by GT's game servers:
     // it can bypass-logon but the game connection keeps failing) so no bot picks it,
@@ -251,58 +245,64 @@ private:
     void schedule_reconnect(const std::string& reason, bool refresh_token,
                             std::uint64_t base_ms);
     void refresh_token();
-    void apply_credentials(const adonai::login::Credentials& creds);
-    void apply_login_identity(const adonai::login::LoginIdentity& identity);
+    void apply_credentials(const nxrth::login::Credentials& creds);
+    void apply_login_identity(const nxrth::login::LoginIdentity& identity);
     // server_data fetch loop shared by ltoken/har constructors + reconnect_main.
-    std::optional<adonai::net::ServerData> fetch_server_data_loop();
+    std::optional<nxrth::net::ServerData> fetch_server_data_loop();
 
     // Connected-phase gate wait that KEEPS ENET SERVICED (in_gate_wait guarded).
     void wait_for_global_gate(Gate& gate, std::uint64_t spacing_ms, const char* label);
 
     // ==== event handlers (bot_core_handlers.cpp) ============================
-    void on_connect(adonai::net::PeerId id);
-    void on_disconnect(adonai::net::PeerId id, std::uint32_t data);
-    void on_receive(adonai::net::PeerId id, std::uint8_t channel,
+    void on_connect(nxrth::net::PeerId id);
+    void on_disconnect(nxrth::net::PeerId id, std::uint32_t data);
+    void on_receive(nxrth::net::PeerId id, std::uint8_t channel,
                     const std::vector<std::uint8_t>& data);
     void on_server_hello();
-    void handle_game_message(const std::string& s, adonai::net::PeerId id);  // scans + logon_fail
+    void handle_game_message(const std::string& s, nxrth::net::PeerId id);  // scans + logon_fail
     void handle_track(const std::string& s);
     void on_ping_request(std::uint32_t challenge);
-    void on_call_function(adonai::net::PeerId id, const std::vector<std::uint8_t>& extra_data);
+    void on_call_function(nxrth::net::PeerId id, const std::vector<std::uint8_t>& extra_data);
     void clear_login_state_flags();
 
     // login/redirect packet builders (bot_core_handlers.cpp)
     std::string build_login_packet() const;                   // 3 forms + login_token_field
+    nxrth::login::LoginIdentity login_identity_view() const;  // members -> LoginIdentity
+    std::string build_provider_login_packet() const;          // full-identity validate-ltoken body
     std::string build_redirect_packet(const RedirectData& r) const;  // protocol|211
-    std::string build_login_data() const;                     // clientData (check_token disabled)
+    std::string build_login_data() const;                     // Google checktoken clientData
 
     // send primitives (all no-op without peer_id; channel 0)
     void send_text(const std::string& text);                  // reliable
     void send_game_message(const std::string& text);          // reliable
-    void send_game_packet(const adonai::protocol::GameUpdatePacket& pkt, bool reliable);
+    void send_game_packet(const nxrth::protocol::GameUpdatePacket& pkt, bool reliable);
 
     // ==== in-world GameUpdate handlers (bot_core_automation.cpp) =============
-    void on_state(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_tile_change(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_send_tile_update_data(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_send_tile_update_data_multiple(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_send_tile_tree_state(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_modify_item_inventory(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_item_change_object(const adonai::protocol::GameUpdatePacket& pkt);
-    void on_send_lock(const adonai::protocol::GameUpdatePacket& pkt);
-    void load_world(const adonai::protocol::GameUpdatePacket& pkt);  // SendMapData
+    void on_state(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_tile_change(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_send_tile_update_data(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_send_tile_update_data_multiple(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_send_tile_tree_state(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_modify_item_inventory(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_item_change_object(const nxrth::protocol::GameUpdatePacket& pkt);
+    void on_send_lock(const nxrth::protocol::GameUpdatePacket& pkt);
+    void load_world(const nxrth::protocol::GameUpdatePacket& pkt);  // SendMapData
 
     // ==== geiger (bot_core_automation.cpp §7) ===============================
-    void update_geiger_signal(const adonai::protocol::GameUpdatePacket& pkt);
+    void update_geiger_signal(const nxrth::protocol::GameUpdatePacket& pkt);
     void sync_geiger_state_from_console(const std::string& message);
     static std::optional<std::tuple<std::uint32_t, std::uint32_t, std::uint8_t>>
-    decode_geiger_signal_packet(const adonai::protocol::GameUpdatePacket& pkt);
+    decode_geiger_signal_packet(const nxrth::protocol::GameUpdatePacket& pkt);
 
     // ==== emit / log / redaction primitives (§11) ===========================
     void log_console(const std::string& msg);  // per-bot SYSTEM log ring (Logs tab)
     void log_chat(const std::string& msg);      // in-game console/chat ring (Console tab)
     void emit_traffic(const std::string& direction, const std::string& kind, std::size_t size,
                       const std::string& detail);
+    bool wants_traffic() const {
+        return (sink_ && sink_->wants_traffic(bot_id_)) ||
+               (state_ && state_->read([](const BotState& s) { return s.traffic_enabled; }));
+    }
     void emit_inventory_update();
     void emit_status(BotStatus status);  // writes state.status + notifies dirty
     void notify_dirty();                  // UI should re-read this bot's BotState
@@ -311,13 +311,13 @@ private:
     std::vector<std::pair<std::uint16_t, std::uint8_t>> build_collision_grid(bool item_collect) const;
 
     // ======================= FIELDS (spec 06 §1.7 order) ====================
-    adonai::net::BotHost host_;                                        // 1
+    nxrth::net::BotHost host_;                                        // 1
     std::optional<Socks5Config> proxy_;                               // 2  game proxy
-    std::optional<adonai::proxy::RotatingLoginProxy> login_proxy_;    // 3
+    std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy_;    // 3
     std::optional<Socks5Config> bypass_enet_;                         // 4  pinned logon IP
     std::shared_ptr<std::atomic<bool>> stop_;                        // 5
     std::string username_;                                            // 6
-    adonai::login::LoginMethod login_method_;                        // 7
+    nxrth::login::LoginMethod login_method_;                        // 7
     std::string ltoken_;                                             // 8
     std::string meta_;                                              // 9
     std::string mac_;                                              // 10
@@ -337,6 +337,7 @@ private:
     std::string steam_token_;                      // 24
     std::string wk_;                              // 25
     std::string rid_;                            // 26
+    std::string vid_;                            // 26b provider validate-token device id
     std::optional<RedirectData> redirect_;      // 27
     std::uint8_t redirect_attempts_ = 0;        // 28
     std::optional<std::string> last_redirect_token_;  // 29
@@ -361,10 +362,10 @@ private:
     float pos_y_ = 0.0f;                        // 43  PIXELS
     LocalPlayer local_;                         // 44
     std::unordered_map<std::uint32_t, Player> players_;  // 45 keyed by net_id
-    adonai::world::Inventory inventory_;        // 46
+    nxrth::world::Inventory inventory_;        // 46
     std::unordered_set<std::uint16_t> equipped_items_;  // 47
-    std::optional<adonai::world::World> world_;  // 48
-    std::optional<adonai::net::PeerId> peer_id_;  // 49
+    std::optional<nxrth::world::World> world_;  // 48
+    std::optional<nxrth::net::PeerId> peer_id_;  // 49
     std::shared_ptr<SharedBotState> state_;     // 50  UI/fleet mirror
     CmdReceiver cmd_rx_;                         // 51
     TemporaryData temporary_data_;              // 52
@@ -373,11 +374,14 @@ private:
     std::uint8_t collect_radius_tiles_ = 3;     // 55  1..5
     std::unordered_set<std::uint16_t> collect_blacklist_;  // 56
     std::chrono::steady_clock::time_point collect_timer_{};  // 57
-    adonai::world::AStar astar_;                // 58
+    std::chrono::steady_clock::time_point ping_timer_{};
+    std::chrono::steady_clock::time_point fleet_publish_timer_{};
+    std::chrono::steady_clock::time_point automation_timer_{};
+    nxrth::world::AStar astar_;                // 58
     std::optional<std::pair<std::uint32_t, std::uint32_t>> pathfind_target_;  // 59
     bool pathfind_recalc_ = false;              // 60
     BotDelays delays_;                          // 61
-    std::shared_ptr<const adonai::world::ItemsDat> items_dat_;  // 62
+    std::shared_ptr<const nxrth::world::ItemsDat> items_dat_;  // 62
     // 63-66: Mori's Lua script channels -> native automation seam (NO Lua).
     std::shared_ptr<std::atomic<bool>> script_stop_ =
         std::make_shared<std::atomic<bool>>(false);            // 66 automation interrupt
@@ -401,7 +405,7 @@ private:
 };
 
 // ===========================================================================
-// Free helper functions (spec 06 §2.1, 07 §1.10/§1.11). adonai::bot namespace.
+// Free helper functions (spec 06 §2.1, 07 §1.10/§1.11). nxrth::bot namespace.
 // ===========================================================================
 
 // compute_klv(GAME_VER, PROTOCOL, rid, hash_as_i32) with DEFAULT_HASH fallback.
@@ -409,8 +413,8 @@ std::string default_klv(std::string_view rid, std::string_view hash);
 // `def` if value.trim() is empty, else value (trim-empty check, not just empty).
 std::string value_or_default(std::string value, std::string_view def);
 // Fill every blank identity field with its default; klv from the resolved rid/hash.
-adonai::login::LoginIdentity resolve_login_identity(
-    const std::optional<adonai::login::LoginIdentity>& identity);
+nxrth::login::LoginIdentity resolve_login_identity(
+    const std::optional<nxrth::login::LoginIdentity>& identity);
 // Copy set to a vector, ascending sort (deterministic publish).
 std::vector<std::uint16_t> sorted_blacklist_vec(const std::unordered_set<std::uint16_t>& set);
 // Wall-clock UNIX epoch millis (saturating, 0 on error) — the ONE wall-clock use.
@@ -432,13 +436,51 @@ std::string truncate_text(const std::string& value, std::size_t max_chars);
 std::string summarize_detail(const std::string& detail);
 // "UbiTicket" if the token has >=3 dot-separated segments (>=2 dots), else "token".
 const char* login_token_field(const std::string& token);
-// trim; empty -> nullopt. Split on '|', trim parts; exactly 4 & part0 non-empty ->
-// (token,rid,mac,wk); else (whole_trimmed, "", "", "").
-std::optional<std::tuple<std::string, std::string, std::string, std::string>>
-parse_ltoken_string(const std::string& s);
+// Exact first gateway packet for Google OAuth/checktoken sessions.
+std::string build_ltoken_gateway_packet(std::string_view token);
+// The provider-ltoken protocol number for the first-gateway + redirect packets.
+// Defaults to "225" (matches the current working reference client); overridable
+// with NXRTH_PLTOKEN_PROTOCOL for empirical iteration.
+std::string provider_login_protocol();
+// PLAINTEXT clientData for /player/growid/checktoken: this device + the server_data
+// meta. Load-bearing fields = rid/mac/vid + meta (klv/hash are accepted but not
+// validated). Shared by the initial login and the reconnect re-exchange.
+std::string build_checktoken_client_data(const nxrth::login::LoginIdentity& id,
+                                         const std::string& meta, const std::string& protocol);
+// First-gateway login packet for a provider validate-ltoken: the FULL client
+// identity (game_version/meta/klv/hash/rid/mac/wk/vid + platformID|1) with the
+// token in `ltoken|`. A bare/minimal packet (no game_version/meta/klv) is rejected
+// by the gateway with "Fail to login. Please try again in 30 seconds."; the real
+// client sends this full body and the gateway then issues an OnSendToServer redirect.
+std::string build_provider_gateway_packet(const nxrth::login::LoginIdentity& id,
+                                          std::string_view protocol, std::string_view meta,
+                                          std::string_view ltoken);
+// Subserver/redirect packet for a provider ltoken session — same identity body,
+// carrying the redirect user/token/UUIDToken/doorID/aat instead of `ltoken|`.
+std::string build_provider_redirect_packet(const nxrth::login::LoginIdentity& id,
+                                           std::string_view protocol, std::string_view meta,
+                                           const RedirectData& r);
+struct LtokenRecord {
+    enum class Kind { GoogleRefreshToken, ProviderToken };
+
+    std::string token;
+    std::string rid;
+    std::string mac;
+    std::string wk;
+    std::optional<std::string> platform_id;
+    std::optional<std::string> name;
+    std::optional<std::string> cbits;
+    std::optional<std::string> player_age;
+    std::optional<std::string> vid;
+    Kind kind = Kind::GoogleRefreshToken;
+};
+// Positional/refreshToken: and token: provider records are refresh tokens exchanged
+// through checktoken. Callers choose whether that exchange uses the assigned game
+// proxy or a pinned rotating-login exit.
+std::optional<LtokenRecord> parse_ltoken_string(const std::string& s);
 // "key|value\n..." -> map; split each line on the FIRST '|'; skip empty keys.
 std::unordered_map<std::string, std::string> parse_pipe_map(const std::string& s);
 // Resolve "host:port" to a SockEndpoint; nullopt on failure.
 std::optional<SockEndpoint> resolve_endpoint(const std::string& host, std::uint16_t port);
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

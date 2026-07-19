@@ -6,7 +6,7 @@
 #include <mutex>
 #include <utility>
 
-namespace adonai::net {
+namespace nxrth::net {
 
 namespace {
 
@@ -219,4 +219,4 @@ HttpResponse HttpClient::Post(const std::string& url, std::string body, HttpRequ
     return Request(opts);
 }
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

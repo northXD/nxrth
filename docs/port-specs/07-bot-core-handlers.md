@@ -3,7 +3,7 @@
 **Source:** `Mori-2.0.0/src/bot/core.rs` (approx. lines 1760–3520, plus supporting
 types pulled in from `protocol/packet.rs`, `protocol/variant.rs`, `protocol/crypto.rs`,
 `player.rs`, `constants.rs`).
-**Target module:** Adonai `bot/core` — the per-bot ENet service loop, disconnect/redirect
+**Target module:** Nxrth `bot/core` — the per-bot ENet service loop, disconnect/redirect
 state machine, incoming-packet dispatch, login/redirect packet builders, and the
 `CallFunction` handler dispatch.
 
@@ -12,9 +12,9 @@ this module in C++ **without** reading the Rust. Every constant, offset, magic s
 and control-flow branch below is load-bearing — preserve them exactly. GT wire data is
 **little-endian**.
 
-> **Rename rules are mandatory** — see §5. In the port, everything is Adonai/North, not
+> **Rename rules are mandatory** — see §5. In the port, everything is Nxrth/North, not
 > Mori/Cloei. This spec quotes the original identifiers so you can find them; do not copy
-> the old names into Adonai.
+> the old names into Nxrth.
 
 ---
 
@@ -225,9 +225,9 @@ These populate the login/redirect packets. Defaults resolved via `resolve_login_
 | `script_reply_tx` | `Option<Sender<ScriptReply>>` | Replies to script thread. |
 | `script_stop` | `Arc<AtomicBool>` (pub) | Interrupt a running script. |
 
-> **Adonai note:** `event_tx`/`script_req_rx`/`script_reply_tx`/`script_stop` exist to
-> drive the **Lua** script engine. Adonai has **no Lua**. Drop the Lua VM entirely; if
-> Adonai keeps a native scripting/automation hook, replace these channels with the
+> **Nxrth note:** `event_tx`/`script_req_rx`/`script_reply_tx`/`script_stop` exist to
+> drive the **Lua** script engine. Nxrth has **no Lua**. Drop the Lua VM entirely; if
+> Nxrth keeps a native scripting/automation hook, replace these channels with the
 > std::mutex+condvar queue described in §3. The `try_send(BotEventRaw::…)` calls in
 > `service_once` become "push to the native automation queue if one is attached".
 
@@ -242,7 +242,7 @@ These populate the login/redirect packets. Defaults resolved via `resolve_login_
 |---|---|---|
 | `stop_requested` | `bool` | Makes `run` exit next iteration. |
 | `bot_id` | `u32` (pub) | Fleet id; tags WS events and log lines. |
-| `ws_tx` | `Option<WsTx>` | Broadcast sender for real-time UI events (None standalone). **Adonai: replace with the ImGui/native event sink.** |
+| `ws_tx` | `Option<WsTx>` | Broadcast sender for real-time UI events (None standalone). **Nxrth: replace with the ImGui/native event sink.** |
 | `last_ping` | `u32` | Last broadcast ping (suppresses redundant BotPing). |
 | `geiger_green_repeat` | `Option<GeigerGreenRepeat>` | Geiger green-particle repeat tracker. |
 
@@ -418,7 +418,7 @@ Accessors used here:
    Unsigned→`u32`; Signed→`i32`; Unknown→no payload.
 3. `get(index) -> Option<&Variant>` is positional (`variants[index]`).
 
-**Adonai:** reimplement natively (nlohmann/json is NOT the wire format — this is a custom
+**Nxrth:** reimplement natively (nlohmann/json is NOT the wire format — this is a custom
 binary TLV). See spec 06 for the full variant module.
 
 ### 1.10 `hash_string` (from `protocol/crypto.rs`)
@@ -467,7 +467,7 @@ Top-level loop (one iteration ≈ 10 ms). Not the primary focus but frames the h
    `connected_since`, `redirect`, `redirect_attempts=0`, `redirect_connect_fails=0`,
    `saw_server_hello=false`; if `peer_id`, `host.peer_disconnect(id, 0)`. (Routes the
    resulting Disconnect down the clean-gateway-reconnect path.)
-8. `drain_script_requests()` (Adonai: native automation queue; §3).
+8. `drain_script_requests()` (Nxrth: native automation queue; §3).
 9. If `auto_collect` and `collect_timer` elapsed ≥ **500 ms**: reset timer, `collect()`.
 10. Sleep 10 ms.
 On loop exit: `shutdown()` (disconnect peer, service 5× with 10 ms sleeps, tear down
@@ -736,7 +736,7 @@ rid|{rid}\ndeviceVersion|0\ncountry|{country}\nhash|{hash}\nmac|{mac}\nwk|{wk}\n
    - `None`: log `"[Bot] ServerHello"`; `wait_for_global_gate(&LOGIN_PACKET_GATE,
      LOGIN_PACKET_STAGGER_MS=1000, "login packet")` (§2.12); `data = build_login_packet()`.
 3. `println!` a `=== RAW LOGIN PACKET ===` block with `redact_packet_text(&data)` to stdout
-   (developer console). **Adonai:** route through the native logger, redacted; do not print
+   (developer console). **Nxrth:** route through the native logger, redacted; do not print
    raw tokens.
 4. `send_text(&data)`.
 
@@ -812,7 +812,7 @@ rid|{rid}\ndeviceVersion|0\ncountry|{country}\nhash|{hash}\nmac|{mac}\nwk|{wk}\n
   - `connected_since = None` (login watchdog satisfied); `was_in_world = true` (a later drop
     = in-world session loss → §2.2 C2).
   - log `"[Bot] OnSpawn (self) net_id={net_id} user_id={user_id}"`.
-  - log `"[Bot] ltoken string: {ltoken}|{rid}|{mac}|{wk}"`. **Adonai: redact — never log the
+  - log `"[Bot] ltoken string: {ltoken}|{rid}|{mac}|{wk}"`. **Nxrth: redact — never log the
     raw ltoken to the shared console.**
   - `state.status = InGame`; emit `BotStatus{"in_game"}`.
 - **Else (another player):** parse from `data`:
@@ -850,7 +850,7 @@ raw server console line).
 
 **`"OnDialogRequest"`:** `message = vl.get(1).as_string()`; log `"[Bot] Dialog: {message}"`;
 take the one-shot `temporary_data.dialog_callback` (lock, `.take()`); if `Some(cb)` →
-`cb(self)`. (Adonai: a `std::function<void(Bot&)>` guarded by a mutex; fire-once.)
+`cb(self)`. (Nxrth: a `std::function<void(Bot&)>` guarded by a mutex; fire-once.)
 
 **`"SetHasGrowID"`:** if `vl.get(2)` present → `growid = it.as_string()`;
 `username = growid`; `state.username = growid`; emit `BotUsername{ username: growid }`.
@@ -973,7 +973,7 @@ use the game proxy. Steps:
 `refresh_token()` (context): tries the login-method-specific fallback (`Legacy`/`Newly`/
 `Requestly` → `pace_http_login()` then `fetch_*_credentials(...)` → `apply_credentials`;
 `HarToken` → re-extract from the `.har`; `Ltoken` → no fallback, `stop_requested = true`).
-The `check_token` loop is **disabled** (commented out) — do not re-enable it in Adonai unless
+The `check_token` loop is **disabled** (commented out) — do not re-enable it in Nxrth unless
 asked.
 
 ### 2.15 `create_host(proxy: Option<&Socks5Config>) -> BotHost` (context)
@@ -988,7 +988,7 @@ ENet `HostSettings`: `peer_limit=1`, `channel_limit=2`, `compressor=RangeCoder`,
   the run loop retries next cycle. log the "NOT falling back to direct" warning.
 - Without a proxy: bind `0.0.0.0:0` → `BotHost::Direct`.
 
-> **Adonai:** the vendored C ENet must be patched for SOCKS5-UDP (the `Socks5UdpSocket`
+> **Nxrth:** the vendored C ENet must be patched for SOCKS5-UDP (the `Socks5UdpSocket`
 > equivalent). Preserve the 4-retry / 300 ms / no-direct-fallback policy — it is a
 > real-IP-leak safeguard.
 
@@ -1008,8 +1008,8 @@ ENet `HostSettings`: `peer_limit=1`, `channel_limit=2`, `compressor=RangeCoder`,
 - `redact_packet_text(text)`: per line, if it has a `|`, lowercase the trimmed key; if the
   key ∈ {`token`, `ltoken`, `ubiticket`, `tankidpass`, `password`, `steamtok`, `steamtoken`,
   `fcmtoken`} → replace the value with `"{key}|<redacted>"`; else keep the line. Join with
-  `\n`. **Adonai must apply this to every logged/emitted packet body.**
-- `emit(event)`: `if let Some(tx) = ws_tx { tx.send(event) }`. **Adonai:** push to the ImGui
+  `\n`. **Nxrth must apply this to every logged/emitted packet body.**
+- `emit(event)`: `if let Some(tx) = ws_tx { tx.send(event) }`. **Nxrth:** push to the ImGui
   event sink / fleet event bus instead of a WebSocket broadcaster.
 - `now_millis()`: `SystemTime::now()` since UNIX_EPOCH as `u64` ms (saturating), 0 on error.
 
@@ -1031,16 +1031,16 @@ ENet `HostSettings`: `peer_limit=1`, `channel_limit=2`, `compressor=RangeCoder`,
   `WARP_GATE`, `GATEWAY_LOGON_GATE`, `DASHBOARD_GATE`) are **process-global** and shared by
   every bot thread. They are the mechanism by which bots are "aware of each other": they
   serialize logins/warps/dashboard POSTs so a bulk spawn doesn't stampede the shared login
-  IP. This is the fleet coordination surface — in Adonai these become
+  IP. This is the fleet coordination surface — in Nxrth these become
   `std::mutex`-guarded `steady_clock::time_point` singletons. Do **not** make them per-bot;
   correctness of the whole fleet's login pacing depends on them being shared.
 - **`stop: Arc<AtomicBool>`** and **`script_stop: Arc<AtomicBool>`** — shared atomics; C++
   `std::atomic<bool>` (relaxed loads match the Rust `Ordering::Relaxed`).
 - **Channels:** `cmd_rx` (UI→bot commands), `event_tx`/`script_req_rx`/`script_reply_tx`
-  (bot↔script), `ws_tx` (bot→UI). The Rust ones are `crossbeam_channel`. Adonai maps every
+  (bot↔script), `ws_tx` (bot→UI). The Rust ones are `crossbeam_channel`. Nxrth maps every
   channel to the **std::mutex + condvar bounded queue** described in the porting brief:
   - `cmd_rx` → command queue drained non-blocking each tick (`try_recv` loop).
-  - `event_tx` → native automation event queue (only if Adonai keeps a scripting hook;
+  - `event_tx` → native automation event queue (only if Nxrth keeps a scripting hook;
     otherwise delete the `try_send(BotEventRaw::…)` calls). **No Lua.**
   - `ws_tx` → in-process event bus feeding the Dear ImGui UI; `emit`/`log_console`/
     `emit_traffic` become pushes onto that bus. **No web server / no Axum.**
@@ -1050,9 +1050,9 @@ ENet `HostSettings`: `peer_limit=1`, `channel_limit=2`, `compressor=RangeCoder`,
 
 ---
 
-## 4. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 4. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
-| Rust (this module) | Purpose here | Adonai C++ |
+| Rust (this module) | Purpose here | Nxrth C++ |
 |---|---|---|
 | `rusty_enet` (`enet::Host`, `Packet`, `PeerID`, `EventNoRef`, `RangeCoder`, `crc32`) | ENet transport; range coder + crc32 checksum; `using_new_packet` | **Vendored C ENet**, patched for SOCKS5-UDP. Keep `peer_limit=1`, `channel_limit=2`, range coder compressor, crc32 checksum, new-packet mode. |
 | `crate::socks5::Socks5UdpSocket` | SOCKS5 UDP-ASSOCIATE socket under ENet | libcurl is HTTP-only — this is a **custom SOCKS5-UDP** socket layer feeding ENet. Port the socks5 module natively (see its own spec); libcurl (`socks5h`) is only for the HTTP login side. |
@@ -1070,33 +1070,33 @@ ENet `HostSettings`: `peer_limit=1`, `channel_limit=2`, `compressor=RangeCoder`,
 
 ---
 
-## 5. RENAME RULES (Mori→Adonai, Cloei→North)
+## 5. RENAME RULES (Mori→Nxrth, Cloei→North)
 
 Apply globally in the port. Every identifier / path / log line / window title / user-agent /
-config filename bearing **Mori/mori** → **Adonai/adonai**; every **Cloei/cloei** → **North/north**.
+config filename bearing **Mori/mori** → **Nxrth/nxrth**; every **Cloei/cloei** → **North/north**.
 
 Concrete occurrences spotted in and around this module:
 
-- **Source path / crate name:** `Mori-2.0.0/src/bot/core.rs` → `adonai/.../bot/core.*`; the
-  crate/namespace `mori` → `adonai`.
+- **Source path / crate name:** `Mori-2.0.0/src/bot/core.rs` → `nxrth/.../bot/core.*`; the
+  crate/namespace `mori` → `nxrth`.
 - **Doc comment (line ~167):** `/// Original Mori-style GrowID login without HAR fallbacks.`
-  → rewrite as "Original Adonai/Newly-style GrowID login…". (Only occurrence of the literal
+  → rewrite as "Original Nxrth/Newly-style GrowID login…". (Only occurrence of the literal
   word "Mori" in this file's range.)
 - **No "Cloei"/"cloei" appears in this specific file range**, but the fleet-wide rule stands:
   any upstream-author references elsewhere (repo name, credits, HAR sample filenames,
   user-agent strings referencing `cloei`) → `North`/`north`. (Per memory: mirror the upstream
   cloei/mori 22-field login POST — that reference to the upstream project name must become
-  `north` in Adonai comments/identifiers, while the field set itself stays as-is.)
+  `north` in Nxrth comments/identifiers, while the field set itself stays as-is.)
 - **Log-line tags:** all console lines here use the neutral tag `"[Bot]"` / `"[Bot#{id}]"`,
-  **not** "Mori" — keep them as `[Bot]`/`[Bot#id]` (no rename needed, but if Adonai brands the
-  logger prefix, use "Adonai", never "Mori").
+  **not** "Mori" — keep them as `[Bot]`/`[Bot#id]` (no rename needed, but if Nxrth brands the
+  logger prefix, use "Nxrth", never "Mori").
 - **User-facing strings that a brand string could leak into:** none hardcode "Mori" in this
   range, but the `println!("=== RAW LOGIN PACKET ===")` and any window title / user-agent set
-  in the app shell must read **Adonai**. Ensure the HTTP user-agent used by the login module
-  (not this file) is `Adonai/…`, never `Mori/…`.
+  in the app shell must read **Nxrth**. Ensure the HTTP user-agent used by the login module
+  (not this file) is `Nxrth/…`, never `Mori/…`.
 - **Config / data filenames:** `requestly_logs.har` (referenced in the `Requestly` doc
   comment) is a Growtopia/Requestly artifact name, **not** a Mori brand — keep it. Any
-  Adonai-owned config file that would have been `mori.*`/`mori_config.*` → `adonai.*`.
+  Nxrth-owned config file that would have been `mori.*`/`mori_config.*` → `nxrth.*`.
 - **The magic protocol string `OnSuperMainStartAcceptLogonHrdxs47254722215a` is a
   Growtopia server token — DO NOT rename.** Likewise `action|enter_game`, `action|logon_fail`,
   `action|request_token`, `OnSendToServer`, `OnSpawn`, field names (`ltoken`, `tankIDName`,
@@ -1106,7 +1106,7 @@ Concrete occurrences spotted in and around this module:
 
 ---
 
-## 6. Implementation checklist (Adonai `bot/core`)
+## 6. Implementation checklist (Nxrth `bot/core`)
 
 1. `EnetHost` wrapper over vendored C ENet (direct + SOCKS5-UDP), error-swallowing
    `next_event`, `peer_set_timeout(0,12000,30000)` on connect.

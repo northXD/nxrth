@@ -1,4 +1,4 @@
-// Adonai — FontAwesome 6 Free (Solid) icon codepoints, merged into the UI font.
+// Nxrth — FontAwesome 6 Free (Solid) icon codepoints, merged into the UI font.
 // Subset of juliettef/IconFontCppHeaders. The .ttf is data/fonts/fa-solid-900.ttf.
 #pragma once
 

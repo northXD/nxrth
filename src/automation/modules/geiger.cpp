@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -17,16 +18,21 @@
 
 #include "automation/geiger_stats.h"  // fleet-wide aggregate + webhook message store
 #include "net/http_client.h"          // Discord webhook POST/PATCH
-#include "world/inventory.h"          // adonai::world::{Inventory, TEMPORARY_ITEM_IDS}
-#include "world/items.h"              // adonai::world::ItemsDat::find_by_id (loot names)
-#include "world/world.h"              // adonai::world::{World, pixel_to_tile} (deposit tile-hop)
+#include "world/inventory.h"          // nxrth::world::{Inventory, TEMPORARY_ITEM_IDS}
+#include "world/items.h"              // nxrth::world::ItemsDat::find_by_id (loot names)
+#include "world/world.h"              // nxrth::world::{World, pixel_to_tile} (deposit tile-hop)
 
-namespace adonai::automation {
+namespace nxrth::automation {
 namespace {
 
-using adonai::bot::GeigerArea;
+using nxrth::bot::GeigerArea;
 
 constexpr std::uint16_t kDeadGeigerId = 2286;  // "dead"/uncharged counter
+
+std::mutex& geiger_webhook_send_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
 
 // The complete set of geiger prize items (GT wiki reward list). The deposit drops
 // ONLY these - never the account's own inventory. Resolved to item ids at runtime
@@ -72,7 +78,7 @@ std::string normalize_door_label(const std::string& value) {
     return out;
 }
 
-std::string loaded_world_name(const adonai::bot::BotContext& self) {
+std::string loaded_world_name(const nxrth::bot::BotContext& self) {
     if (!self.world()) return {};
     return upper(self.world()->tile_map.world_name);
 }
@@ -169,7 +175,7 @@ inline double dist2i(int px, int py, int ox, int oy) {
     return dx * dx + dy * dy;
 }
 
-std::uint32_t inv_amount(const adonai::world::Inventory& inv, std::uint16_t id) {
+std::uint32_t inv_amount(const nxrth::world::Inventory& inv, std::uint16_t id) {
     auto it = inv.items.find(id);
     return it != inv.items.end() ? static_cast<std::uint32_t>(it->second.amount) : 0u;
 }
@@ -179,22 +185,22 @@ std::uint32_t inv_amount(const adonai::world::Inventory& inv, std::uint16_t id) 
 // ---------------------------------------------------------------------------
 // world / warp / claim plumbing (unchanged working farm-loop machinery)
 // ---------------------------------------------------------------------------
-void GeigerModule::release_claim(adonai::bot::FleetState& fleet) {
+void GeigerModule::release_claim(nxrth::bot::FleetState& fleet) {
     if (!claim_key_.empty()) {
         fleet.release(claim_key_, bot_id_);
         claim_key_.clear();
     }
 }
 
-void GeigerModule::release_pickup_claim(adonai::bot::FleetState& fleet) {
+void GeigerModule::release_pickup_claim(nxrth::bot::FleetState& fleet) {
     if (!pickup_claim_key_.empty()) {
         fleet.release(pickup_claim_key_, bot_id_);
         pickup_claim_key_.clear();
     }
 }
 
-void GeigerModule::on_enabled(adonai::bot::BotContext& self,
-                              adonai::bot::FleetState& fleet) {
+void GeigerModule::on_enabled(nxrth::bot::BotContext& self,
+                              nxrth::bot::FleetState& fleet) {
     bot_id_ = self.bot_id();
     release_claim(fleet);
     release_pickup_claim(fleet);
@@ -213,8 +219,8 @@ void GeigerModule::on_enabled(adonai::bot::BotContext& self,
     self.log("[geiger] automation enabled; runtime cooldowns and depot claims reset");
 }
 
-void GeigerModule::on_disabled(adonai::bot::BotContext& self,
-                               adonai::bot::FleetState& fleet) {
+void GeigerModule::on_disabled(nxrth::bot::BotContext& self,
+                               nxrth::bot::FleetState& fleet) {
     bot_id_ = self.bot_id();
     release_claim(fleet);
     release_pickup_claim(fleet);
@@ -224,17 +230,17 @@ void GeigerModule::on_disabled(adonai::bot::BotContext& self,
 }
 
 GeigerModule::DoorCheck GeigerModule::check_target_door(
-    adonai::bot::BotContext& self,
+    nxrth::bot::BotContext& self,
     const std::pair<std::string, std::string>& target) const {
     if (target.second.empty()) return DoorCheck::Verified;
     const auto& world = self.world();
     if (!world || upper(world->tile_map.world_name) != target.first) return DoorCheck::Mismatch;
 
     const std::string wanted = normalize_door_label(target.second);
-    const adonai::world::Tile* wanted_tile = nullptr;
-    const adonai::world::Tile* main_tile = nullptr;
+    const nxrth::world::Tile* wanted_tile = nullptr;
+    const nxrth::world::Tile* main_tile = nullptr;
     for (const auto& tile : world->tile_map.tiles) {
-        const auto* door = std::get_if<adonai::world::tiletype::Door>(&tile.tile_type);
+        const auto* door = std::get_if<nxrth::world::tiletype::Door>(&tile.tile_type);
         const bool is_door = tile.fg_item_id == 6 || door != nullptr;
         if (!is_door) continue;
         const std::string label = door ? normalize_door_label(door->label) : std::string();
@@ -242,8 +248,8 @@ GeigerModule::DoorCheck GeigerModule::check_target_door(
         if (!main_tile && (tile.fg_item_id == 6 || label.empty())) main_tile = &tile;
     }
 
-    const int here_x = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
-    const int here_y = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+    const int here_x = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_x()));
+    const int here_y = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_y()));
     if (wanted_tile && dist2i(here_x, here_y, static_cast<int>(wanted_tile->x),
                               static_cast<int>(wanted_tile->y)) <= 16.0)
         return DoorCheck::Verified;
@@ -257,7 +263,7 @@ GeigerModule::DoorCheck GeigerModule::check_target_door(
     return DoorCheck::Cautious;
 }
 
-bool GeigerModule::warp_towards(adonai::bot::BotContext& self, const std::string& cur,
+bool GeigerModule::warp_towards(nxrth::bot::BotContext& self, const std::string& cur,
                                  const std::pair<std::string, std::string>& target) {
     const auto now = Clock::now();
     const std::string target_key = target.first + ":" + normalize_door_label(target.second);
@@ -304,7 +310,7 @@ bool GeigerModule::warp_towards(adonai::bot::BotContext& self, const std::string
 }
 
 bool GeigerModule::refresh_hunt_world(
-    adonai::bot::BotContext& self, const std::pair<std::string, std::string>& target,
+    nxrth::bot::BotContext& self, const std::pair<std::string, std::string>& target,
     const std::string& reason) {
     self.log("[geiger] " + reason + "; rejoining " + target.first);
     self.leave_world();
@@ -321,7 +327,7 @@ bool GeigerModule::refresh_hunt_world(
 // candidate-elimination search (port of Mori reset_candidates / apply_observation
 // / choose_probe / score_probe / build_probe_points)
 // ---------------------------------------------------------------------------
-void GeigerModule::suppress_collect(adonai::bot::BotContext& self) {
+void GeigerModule::suppress_collect(nxrth::bot::BotContext& self) {
     if (!collect_off_) {
         collect_saved_ = self.auto_collect();
         self.set_auto_collect(false);
@@ -329,7 +335,7 @@ void GeigerModule::suppress_collect(adonai::bot::BotContext& self) {
     }
 }
 
-void GeigerModule::restore_collect(adonai::bot::BotContext& self) {
+void GeigerModule::restore_collect(nxrth::bot::BotContext& self) {
     if (collect_off_) {
         self.set_auto_collect(collect_saved_);
         collect_off_ = false;
@@ -337,7 +343,7 @@ void GeigerModule::restore_collect(adonai::bot::BotContext& self) {
 }
 
 std::unordered_map<std::uint16_t, std::uint32_t> GeigerModule::build_prize_plan(
-    const adonai::world::Inventory& inv, std::uint16_t item) const {
+    const nxrth::world::Inventory& inv, std::uint16_t item) const {
     // Every held geiger PRIZE id -> keep 0 (drop all of it). Never the counters,
     // never the account's own items. If the prize set couldn't be resolved
     // (items.dat missing) fall back to "all non-temporary loot" so deposits work.
@@ -348,7 +354,7 @@ std::unordered_map<std::uint16_t, std::uint32_t> GeigerModule::build_prize_plan(
             if (!drop_ids_.count(id)) continue;
         } else {
             bool temp = false;
-            for (auto t : adonai::world::TEMPORARY_ITEM_IDS)
+            for (auto t : nxrth::world::TEMPORARY_ITEM_IDS)
                 if (t == id) temp = true;
             if (temp) continue;
         }
@@ -357,25 +363,25 @@ std::unordered_map<std::uint16_t, std::uint32_t> GeigerModule::build_prize_plan(
     return plan;
 }
 
-bool GeigerModule::try_pickup_counter(adonai::bot::BotContext& self, std::uint16_t item,
+bool GeigerModule::try_pickup_counter(nxrth::bot::BotContext& self, std::uint16_t item,
                                       std::uint64_t scan_ms, int empty_scan_limit) {
     const auto now = Clock::now();
     if (now < pickup_next_scan_ || !self.world()) return false;
 
     const auto& objects = self.world()->objects;
-    const auto here_x = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
-    const auto here_y = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
-    std::vector<adonai::world::WorldObject> counters;
+    const auto here_x = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_x()));
+    const auto here_y = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_y()));
+    std::vector<nxrth::world::WorldObject> counters;
     for (const auto& object : objects) {
         if (object.item_id != item && object.item_id != kDeadGeigerId) continue;
         counters.push_back(object);
     }
     std::sort(counters.begin(), counters.end(), [&](const auto& a, const auto& b) {
         if ((a.item_id == item) != (b.item_id == item)) return a.item_id == item;
-        const auto ax = static_cast<int>(adonai::world::pixel_to_tile(a.x));
-        const auto ay = static_cast<int>(adonai::world::pixel_to_tile(a.y));
-        const auto bx = static_cast<int>(adonai::world::pixel_to_tile(b.x));
-        const auto by = static_cast<int>(adonai::world::pixel_to_tile(b.y));
+        const auto ax = static_cast<int>(nxrth::world::pixel_to_tile(a.x));
+        const auto ay = static_cast<int>(nxrth::world::pixel_to_tile(a.y));
+        const auto bx = static_cast<int>(nxrth::world::pixel_to_tile(b.x));
+        const auto by = static_cast<int>(nxrth::world::pixel_to_tile(b.y));
         return dist2i(here_x, here_y, ax, ay) < dist2i(here_x, here_y, bx, by);
     });
 
@@ -399,8 +405,8 @@ bool GeigerModule::try_pickup_counter(adonai::bot::BotContext& self, std::uint16
         {0, -2}, {0, 2},  {1, -1}, {-1, -1}, {1, 1}, {-1, 1},
     };
     for (const auto& object : counters) {
-        const int tx = static_cast<int>(adonai::world::pixel_to_tile(object.x));
-        const int ty = static_cast<int>(adonai::world::pixel_to_tile(object.y));
+        const int tx = static_cast<int>(nxrth::world::pixel_to_tile(object.x));
+        const int ty = static_cast<int>(nxrth::world::pixel_to_tile(object.y));
         self.log("[geiger] pickup counter item=" + std::to_string(object.item_id) + " uid=" +
                  std::to_string(object.uid) + " at " + std::to_string(tx) + ":" +
                  std::to_string(ty));
@@ -411,8 +417,8 @@ bool GeigerModule::try_pickup_counter(adonai::bot::BotContext& self, std::uint16
             if (px < 0 || py < 0 || px >= static_cast<int>(self.world()->tile_map.width) ||
                 py >= static_cast<int>(self.world()->tile_map.height))
                 continue;
-            const int cx = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
-            const int cy = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+            const int cx = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_x()));
+            const int cy = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_y()));
             if (cx != px || cy != py) {
                 const auto path = self.compute_path(static_cast<std::uint32_t>(px),
                                                     static_cast<std::uint32_t>(py));
@@ -420,8 +426,8 @@ bool GeigerModule::try_pickup_counter(adonai::bot::BotContext& self, std::uint16
                 self.find_path(static_cast<std::uint32_t>(px), static_cast<std::uint32_t>(py));
             }
             if (!self.world() || loaded_world_name(self) != before_world) return false;
-            const int ax = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
-            const int ay = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+            const int ax = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_x()));
+            const int ay = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_y()));
             if (dist2i(ax, ay, tx, ty) > 25.0) continue;
 
             self.collect_object_at(object.uid, 3.0f);
@@ -451,13 +457,13 @@ bool GeigerModule::try_pickup_counter(adonai::bot::BotContext& self, std::uint16
     return false;
 }
 
-bool GeigerModule::hop_to_neighbour_tile(adonai::bot::BotContext& self, int seq) {
+bool GeigerModule::hop_to_neighbour_tile(nxrth::bot::BotContext& self, int seq) {
     const auto& w = self.world();  // std::optional<World>&
     if (!w) return false;
     const int W = static_cast<int>(w->tile_map.width);
     const int H = static_cast<int>(w->tile_map.height);
-    const int cx = static_cast<int>(adonai::world::pixel_to_tile(self.pos_x()));
-    const int cy = static_cast<int>(adonai::world::pixel_to_tile(self.pos_y()));
+    const int cx = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_x()));
+    const int cy = static_cast<int>(nxrth::world::pixel_to_tile(self.pos_y()));
     // 8 neighbours; rotate the starting direction each hop so drops fan out over
     // several tiles ("random sag/sol/ust" spread) instead of piling on one.
     static const int dirs[8][2] = {{1, 0},  {-1, 0}, {0, 1},  {0, -1},
@@ -477,7 +483,7 @@ bool GeigerModule::hop_to_neighbour_tile(adonai::bot::BotContext& self, int seq)
 }
 
 std::uint32_t GeigerModule::run_deposit(
-    adonai::bot::BotContext& self,
+    nxrth::bot::BotContext& self,
     const std::unordered_map<std::uint16_t, std::uint32_t>& plan) {
     if (plan.empty()) return 0;
     constexpr std::uint64_t kDropPauseMs = 1500;  // dialog + inventory-update settle
@@ -544,7 +550,7 @@ void GeigerModule::fill_candidate_grid() {
                 {static_cast<std::uint16_t>(x), static_cast<std::uint16_t>(y)});
 }
 
-void GeigerModule::reset_candidates(adonai::bot::BotContext& self, int min_y, int max_y_cap,
+void GeigerModule::reset_candidates(nxrth::bot::BotContext& self, int min_y, int max_y_cap,
                                     int width_cap) {
     // Bound the grid by the REAL current-world tile map (fixes the "config-only
     // bounds" gap); fall back to config caps if the world isn't loaded yet.
@@ -711,7 +717,7 @@ GeigerModule::Point GeigerModule::choose_probe(const std::optional<Obs>& focus) 
     return best;
 }
 
-bool GeigerModule::detect_prize_fallback(const adonai::world::Inventory& inv,
+bool GeigerModule::detect_prize_fallback(const nxrth::world::Inventory& inv,
                                           std::uint16_t item) const {
     // Signal-independent: the charged counter was consumed (count dropped) or a
     // dead counter appeared (count rose) -> we just found a prize.
@@ -725,8 +731,8 @@ bool GeigerModule::detect_prize_fallback(const adonai::world::Inventory& inv,
     return false;
 }
 
-void GeigerModule::build_drop_ids(adonai::bot::BotContext& self,
-                                  const adonai::bot::AutomationConfig& cfg) {
+void GeigerModule::build_drop_ids(nxrth::bot::BotContext& self,
+                                  const nxrth::bot::AutomationConfig& cfg) {
     drop_ids_.clear();
     if (const auto* items = self.items_dat()) {
         for (const char* nm : kGeigerPrizeNames)
@@ -755,10 +761,22 @@ void GeigerModule::build_drop_ids(adonai::bot::BotContext& self,
 }
 
 void GeigerModule::send_geiger_webhook(
-    adonai::bot::BotContext& self, const std::string& url, const std::string& username,
-    const std::string& world, const std::unordered_map<std::uint16_t, std::uint32_t>& gained,
-    std::uint32_t px, std::uint32_t py) const {
+    nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+    const std::string& url, const std::string& username, const std::string& world,
+    const std::unordered_map<std::uint16_t, std::uint32_t>& gained, std::uint32_t px,
+    std::uint32_t py) const {
+    // Message-id lookup, POST/PATCH, and id persistence must be one process-wide
+    // transaction. Without this lock, simultaneous prizes can all observe an
+    // empty id and each create a separate Discord message.
+    std::lock_guard<std::mutex> send_lock(geiger_webhook_send_mutex());
+
     const GeigerAgg agg = geiger_stats_snapshot();
+    const auto members = fleet.snapshot();
+    const std::size_t online_count = static_cast<std::size_t>(std::count_if(
+        members.begin(), members.end(), [](const nxrth::bot::BotView& bot) {
+            return bot.status == nxrth::bot::BotStatus::InGame;
+        }));
+    const std::size_t offline_count = members.size() - online_count;
     const auto* items = self.items_dat();
     auto name_of = [&](std::uint16_t id) -> std::string {
         if (items)
@@ -769,7 +787,9 @@ void GeigerModule::send_geiger_webhook(
 
     // ---- fleet-wide totals + this find's loot -> Discord embed description ----
     std::string desc = "**Geiger farm - fleet totals**\n";
-    desc += "Total prizes found: **" + std::to_string(agg.total_finds) + "x**\n\n";
+    desc += "Total prizes found: **" + std::to_string(agg.total_finds) + "x**\n";
+    desc += "Online Bot Count: **" + std::to_string(online_count) + "**\n";
+    desc += "Offline Bot Count: **" + std::to_string(offline_count) + "**\n\n";
     std::vector<std::pair<std::uint16_t, std::uint64_t>> rows(agg.counts.begin(),
                                                               agg.counts.end());
     std::sort(rows.begin(), rows.end(),
@@ -798,13 +818,13 @@ void GeigerModule::send_geiger_webhook(
     embed["description"] = desc;
     embed["color"] = 65280;  // green, matches Mori
     nlohmann::json payload;
-    payload["username"] = "Adonai Geiger";
+    payload["username"] = "Nxrth Geiger";
     payload["content"] = "";
     payload["embeds"] = nlohmann::json::array({embed});
     const std::string body = payload.dump();
 
-    adonai::net::HttpClient client;
-    adonai::net::HttpRequest opts;
+    nxrth::net::HttpClient client;
+    nxrth::net::HttpRequest opts;
     opts.headers.push_back({"Content-Type", "application/json"});
     opts.timeout_secs = 8;
 
@@ -812,7 +832,7 @@ void GeigerModule::send_geiger_webhook(
     // POST a fresh one with ?wait=true and remember the id (no per-find spam).
     const std::string msg_id = geiger_webhook_message_id(url);
     if (!msg_id.empty()) {
-        adonai::net::HttpRequest patch = opts;
+        nxrth::net::HttpRequest patch = opts;
         patch.url = url + "/messages/" + msg_id;
         patch.body = body;
         patch.custom_method = "PATCH";
@@ -833,7 +853,7 @@ void GeigerModule::send_geiger_webhook(
     }
 }
 
-void GeigerModule::on_prize(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet,
+void GeigerModule::on_prize(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
                            int recharge_min) {
     const auto cfg = fleet.config_snapshot();
     const std::uint16_t item =
@@ -845,7 +865,7 @@ void GeigerModule::on_prize(adonai::bot::BotContext& self, adonai::bot::FleetSta
     for (const auto& [id, it] : self.inventory().items) {
         if (id == item || id == kDeadGeigerId) continue;
         bool temp = false;
-        for (auto t : adonai::world::TEMPORARY_ITEM_IDS)
+        for (auto t : nxrth::world::TEMPORARY_ITEM_IDS)
             if (t == id) temp = true;
         if (temp) continue;
         std::uint32_t before = 0;
@@ -863,7 +883,7 @@ void GeigerModule::on_prize(adonai::bot::BotContext& self, adonai::bot::FleetSta
         }
         std::string uname;
         if (auto v = fleet.get(bot_id_)) uname = v->username;
-        send_geiger_webhook(self, url, uname, world_name_, gained, px, py);
+        send_geiger_webhook(self, fleet, url, uname, world_name_, gained, px, py);
     }
 
     // 3. mark the current reading consumed (stops a stale Prize particle from
@@ -882,7 +902,8 @@ void GeigerModule::on_prize(adonai::bot::BotContext& self, adonai::bot::FleetSta
 // ---------------------------------------------------------------------------
 // tick: recharge gate -> ensure counter -> deposit -> travel -> ELIMINATION SEARCH
 // ---------------------------------------------------------------------------
-void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) {
+void GeigerModule::tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+                        const nxrth::bot::AutomationConfig& config) {
     bot_id_ = self.bot_id();
 
     // Read the current world FIRST. At the white door (world-select) the engine
@@ -923,15 +944,23 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     // how Mori recovers from a failed warp.
 
     // ---- config (fleet-wide, live) ----
-    const auto cfg = fleet.config_snapshot();
-    const auto hunt = parse_worlds(cfg.param("geiger_hunt_worlds", ""));
-    const auto depot = parse_worlds(cfg.param("geiger_depot_worlds", ""));
+    const auto& cfg = config;
+    const std::string hunt_param = cfg.param("geiger_hunt_worlds", "");
+    if (hunt_param != hunt_worlds_param_) {
+        hunt_worlds_param_ = hunt_param;
+        hunt_worlds_ = parse_worlds(hunt_param);
+    }
+    const std::string depot_param = cfg.param("geiger_depot_worlds", "");
+    if (depot_param != depot_worlds_param_) {
+        depot_worlds_param_ = depot_param;
+        depot_worlds_ = parse_worlds(depot_param);
+    }
     const std::string pickup_param = cfg.param("geiger_pickup_worlds", "");
-    const auto pickup = parse_worlds(pickup_param);
     if (pickup_param != pickup_worlds_param_) {
         const bool was_configured = !pickup_worlds_param_.empty();
         release_pickup_claim(fleet);
         pickup_worlds_param_ = pickup_param;
+        pickup_worlds_ = parse_worlds(pickup_param);
         pickup_target_offset_ = 0;
         pickup_empty_scans_ = 0;
         pickup_retry_after_ = {};
@@ -941,6 +970,9 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
         if (was_configured)
             self.log("[geiger] pickup/geiger depot config changed; cleanup cooldown reset");
     }
+    const auto& hunt = hunt_worlds_;
+    const auto& depot = depot_worlds_;
+    const auto& pickup = pickup_worlds_;
     const std::uint16_t item =
         static_cast<std::uint16_t>(atoi_or(cfg.param("geiger_item", "2204"), 2204));
     const bool wear = cfg.param("geiger_wear", "1") != "0";
@@ -1232,8 +1264,8 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
         baseline = std::max<std::uint64_t>(baseline, cur->timestamp_ms);
 
     const std::string measurement_world = loaded_world_name(self);
-    const auto start_x = adonai::world::pixel_to_tile(self.pos_x());
-    const auto start_y = adonai::world::pixel_to_tile(self.pos_y());
+    const auto start_x = nxrth::world::pixel_to_tile(self.pos_x());
+    const auto start_y = nxrth::world::pixel_to_tile(self.pos_y());
     if (start_x != target.x || start_y != target.y) {
         const auto path = self.compute_path(target.x, target.y);
         if (path.empty()) {
@@ -1251,8 +1283,8 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
         reset_hunt_state();
         return;
     }
-    const auto reached_x = adonai::world::pixel_to_tile(self.pos_x());
-    const auto reached_y = adonai::world::pixel_to_tile(self.pos_y());
+    const auto reached_x = nxrth::world::pixel_to_tile(self.pos_x());
+    const auto reached_y = nxrth::world::pixel_to_tile(self.pos_y());
     if (reached_x != target.x || reached_y != target.y) {
         self.log("[geiger] movement did not reach " + std::to_string(target.x) + ":" +
                  std::to_string(target.y) + "; observation ignored");
@@ -1340,4 +1372,4 @@ void GeigerModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& 
     // else: probe again next tick
 }
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

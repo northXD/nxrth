@@ -1,9 +1,9 @@
-// Adonai — FleetState implementation (port spec 09 §5.3).
+// Nxrth — FleetState implementation (port spec 09 §5.3).
 #include "bot/fleet_state.h"
 
 #include <algorithm>
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 void FleetState::upsert(const BotView& v) {
     std::unique_lock<std::shared_mutex> lk(mtx_);
@@ -99,12 +99,17 @@ std::optional<WorldShare> FleetState::get_world(const std::string& name) const {
 
 AutomationConfig FleetState::config_snapshot() const {
     std::shared_lock<std::shared_mutex> lk(mtx_);
+    return *config_;
+}
+
+std::shared_ptr<const AutomationConfig> FleetState::config_handle() const {
+    std::shared_lock<std::shared_mutex> lk(mtx_);
     return config_;
 }
 
 void FleetState::set_config(AutomationConfig cfg) {
     std::unique_lock<std::shared_mutex> lk(mtx_);
-    config_ = std::move(cfg);
+    config_ = std::make_shared<const AutomationConfig>(std::move(cfg));
 }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

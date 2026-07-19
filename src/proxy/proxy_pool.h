@@ -1,4 +1,4 @@
-// Adonai — proxy configuration model (ported from Mori/proxy_pool.rs;
+// Nxrth — proxy configuration model (ported from Mori/proxy_pool.rs;
 // docs/port-specs/04-proxy.md §3-§5).
 //
 // Two concerns live here:
@@ -14,7 +14,7 @@
 // Config persists to <cwd>/data/proxy_pool.json.
 #pragma once
 
-#include "net/socks5_udp.h"  // adonai::net::Socks5Config
+#include "net/socks5_udp.h"  // nxrth::net::Socks5Config
 
 #include <cstdint>
 #include <filesystem>
@@ -24,9 +24,9 @@
 #include <unordered_map>
 #include <vector>
 
-namespace adonai::proxy {
+namespace nxrth::proxy {
 
-using Socks5Config = adonai::net::Socks5Config;
+using Socks5Config = nxrth::net::Socks5Config;
 
 // active-count map: capacity_key ("ip:port") -> number of active bots on it.
 using ActiveCounts = std::unordered_map<std::string, std::size_t>;
@@ -65,6 +65,7 @@ struct ProxyPoolConfig {
     bool enabled = false;
     std::size_t max_bots_per_ip = 1;
     ProxySpreadMode spread_mode = ProxySpreadMode::LeastLoaded;
+    bool shuffle_selection = false;
     std::vector<ProxyEntry> proxies;              // GAME/world pool
     std::size_t next_index = 0;                   // persisted round-robin cursor
     bool rotating_login_enabled = false;
@@ -88,6 +89,7 @@ struct ProxyPoolView {
     bool enabled = false;
     std::size_t max_bots_per_ip = 0;
     std::string spread_mode;
+    bool shuffle_selection = false;
     std::string proxies_text;
     std::size_t total = 0;
     std::size_t available = 0;
@@ -111,9 +113,10 @@ struct BypassLoginSession {
 class RotatingLoginProxy {
 public:
     RotatingLoginProxy(std::vector<ProxyEntry> pool, std::uint16_t span,
-                       std::string configured_scheme)
+                       std::string configured_scheme, bool shuffle_selection)
         : pool_(std::move(pool)), span_(span),
-          configured_scheme_(std::move(configured_scheme)) {}
+          configured_scheme_(std::move(configured_scheme)),
+          shuffle_selection_(shuffle_selection) {}
 
     // Proxy URL for a FRESH exit IP each call (HTTP-only use).
     std::string fresh_url() const;
@@ -126,6 +129,7 @@ private:
     std::vector<ProxyEntry> pool_;
     std::uint16_t span_ = 1;
     std::string configured_scheme_;
+    bool shuffle_selection_ = false;
 };
 
 // --- the stateful manager ----------------------------------------------------
@@ -141,7 +145,8 @@ public:
     // Edit + persist. Throws std::runtime_error (verbatim message) if any
     // non-blank proxy line fails to parse.
     void update(bool enabled, std::size_t max_bots_per_ip,
-                const std::string& spread_mode, const std::string& proxies_text,
+                const std::string& spread_mode, bool shuffle_selection,
+                const std::string& proxies_text,
                 bool rotating_login_enabled, const std::string& rotating_login_scheme,
                 std::uint16_t rotating_login_port_span,
                 const std::string& rotating_login_proxy_text);
@@ -180,6 +185,14 @@ bool is_proxy_quarantined(const std::string& ip_port);
 std::vector<std::string> quarantined_proxies();
 void clear_quarantine();
 
+// --- active SOCKS5 reachability probe (for the Proxy tab "Check" button) ------
+// Runs the full SOCKS5 handshake through `cfg`: method negotiation, RFC-1929
+// user/pass auth, and UDP ASSOCIATE (exactly what a bot needs for the game).
+// Returns true only if the proxy accepts it; false on ANY failure (host down,
+// connection refused, wrong username/password, no UDP ASSOCIATE). Blocks up to
+// ~25s (10s TCP connect + 15s control r/w) — always call off the UI thread.
+bool probe_socks5(const Socks5Config& cfg);
+
 // --- free parsing / scheme helpers (exposed for callers + tests) -------------
 std::vector<ProxyEntry> parse_proxy_lines(const std::string& input);
 std::optional<ProxyEntry> parse_optional_proxy(const std::string& input);
@@ -190,4 +203,4 @@ const char* infer_proxy_scheme_from_port(std::uint16_t port);
 std::uint16_t normalized_rotating_port_span(std::uint16_t base_port,
                                             std::uint16_t span);
 
-}  // namespace adonai::proxy
+}  // namespace nxrth::proxy

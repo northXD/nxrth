@@ -1,4 +1,4 @@
-// Adonai — GrowID dashboard POST implementation (see dashboard.h / §4.2).
+// Nxrth — GrowID dashboard POST implementation (see dashboard.h / §4.2).
 #include "login/dashboard.h"
 
 #include <algorithm>
@@ -12,17 +12,17 @@
 #include "net/http_client.h"
 #include "protocol/crypto.h"
 
-namespace adonai::login {
+namespace nxrth::login {
 namespace {
 
-namespace consts = adonai::constants;
-using adonai::net::HttpClient;
-using adonai::net::HttpHeader;
-using adonai::net::HttpRequest;
-using adonai::net::HttpResponse;
-using adonai::net::LoginInfo;
+namespace consts = nxrth::constants;
+using nxrth::net::HttpClient;
+using nxrth::net::HttpHeader;
+using nxrth::net::HttpRequest;
+using nxrth::net::HttpResponse;
+using nxrth::net::LoginInfo;
 
-// UA sent to the legacy/newly dashboard + growid pages (wire-fixed, do not rename).
+// UA sent to the legacy dashboard + GrowID pages (wire-fixed, do not rename).
 constexpr const char* kMacUA =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
 constexpr const char* kValKey = "40db4045f2d8c572efe8c4a060605726";
@@ -53,7 +53,7 @@ std::string default_klv(const LoginInfo& login_info) {
     } catch (...) {
         hash_i32 = 0;
     }
-    return adonai::protocol::compute_klv(login_info.game_version,
+    return nxrth::protocol::compute_klv(login_info.game_version,
                                          std::to_string(login_info.protocol),
                                          std::string(consts::DEFAULT_RID), hash_i32);
 }
@@ -252,60 +252,6 @@ DashboardResult parse_dashboard_response(const std::string& html, const std::str
     return {links, ""};
 }
 
-DashboardResult get_newly_dashboard_proxied(const std::string& login_url,
-                                            const LoginInfo& login_info, const std::string& meta,
-                                            const std::optional<std::string>& proxy_url,
-                                            const std::optional<NewlyDashboardIdentity>& identity) {
-    // Values from identity if present, else the canonical newly defaults.
-    std::string cbits = identity ? identity->cbits : "0";
-    std::string player_age = identity ? identity->player_age : "25";
-    std::string gdpr = identity ? identity->gdpr : "1";
-    std::string category = identity ? identity->category : "_-5100";
-    std::string total_playtime = identity ? identity->total_playtime : "0";
-    std::string country = identity ? identity->country : "us";
-    std::string rid = identity ? identity->rid : std::string(consts::DEFAULT_RID);
-    std::string mac = identity ? identity->mac : "02:00:00:00:00:00";
-    std::string wk = identity ? identity->wk : "NONE0";
-    std::string hash = identity ? identity->hash : std::string(consts::DEFAULT_HASH);
-    std::string platform_id = identity ? identity->platform_id : std::string(consts::DEFAULT_PLATFORM_ID);
-    std::string klv = identity ? identity->klv : default_klv(login_info);
-
-    // EXACTLY 22 fields, exact order (column-major per §4.2). DO NOT add
-    // fz/hash2/zf/steamToken — the 5.51 dashboard 500s if they are present.
-    // (upstream north/adonai sends exactly these 22 fields.)
-    std::vector<std::pair<std::string, std::string>> fields = {
-        {"tankIDName", ""},
-        {"tankIDPass", ""},
-        {"requestedName", ""},
-        {"f", "1"},
-        {"protocol", std::to_string(login_info.protocol)},
-        {"game_version", login_info.game_version},
-        {"cbits", cbits},
-        {"player_age", player_age},
-        {"GDPR", gdpr},
-        {"FCMToken", ""},
-        {"category", category},
-        {"totalPlaytime", total_playtime},
-        {"klv", klv},
-        {"meta", meta},
-        {"fhash", std::to_string(consts::FHASH)},
-        {"rid", rid},
-        {"platformID", platform_id},
-        {"deviceVersion", "0"},
-        {"country", country},
-        {"hash", hash},
-        {"mac", mac},
-        {"wk", wk},
-    };
-
-    std::string url = "https://" + login_url + "/player/login/dashboard?valKey=" + kValKey;
-    std::vector<HttpHeader> headers = {
-        {"Content-Type", "application/x-www-form-urlencoded"},
-        {"Origin", "https://" + login_url},
-    };
-    return post_and_follow(url, build_pipe_body(fields), login_url, std::move(headers), proxy_url);
-}
-
 DashboardResult get_dashboard_proxied(const std::string& login_url, const LoginInfo& login_info,
                                       const std::string& meta,
                                       const std::optional<std::string>& proxy_url) {
@@ -345,4 +291,4 @@ DashboardResult get_dashboard_proxied(const std::string& login_url, const LoginI
     return post_and_follow(url, build_pipe_body(fields), login_url, std::move(headers), proxy_url);
 }
 
-}  // namespace adonai::login
+}  // namespace nxrth::login

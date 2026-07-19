@@ -1,4 +1,4 @@
-// Adonai — reusable libcurl HTTP client (the single HTTP primitive).
+// Nxrth — reusable libcurl HTTP client (the single HTTP primitive).
 //
 // This wraps one persistent libcurl easy handle and is the transport used by:
 //   * server_data   — POST server_data.php (TLS-verify OFF, 20s timeout)
@@ -27,7 +27,7 @@
 #include <string_view>
 #include <vector>
 
-namespace adonai::net {
+namespace nxrth::net {
 
 enum class HttpMethod { Get, Post };
 
@@ -110,4 +110,4 @@ private:
     void* handle_;  // CURL* (opaque here to keep <curl/curl.h> out of the header)
 };
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

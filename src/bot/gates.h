@@ -1,4 +1,4 @@
-// Adonai — process-global fleet stagger GATES (port specs 06 §1.1-§1.2 / §2.1,
+// Nxrth — process-global fleet stagger GATES (port specs 06 §1.1-§1.2 / §2.1,
 // 07 §0.1/§0.3, 08 §3). These six mutex-guarded monotonic timestamps are the
 // ONLY state shared across ALL bot threads and are how the fleet becomes "aware
 // of each other" for login pacing: every bot reserves slots from the same cursor
@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <mutex>
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 // --- Stagger / backoff constants (u64 ms unless noted) ----------------------
 inline constexpr std::uint64_t LOGIN_PACKET_STAGGER_MS = 1000;   // login pkt after ServerHello
@@ -69,9 +69,9 @@ SteadyTp reserve_throttle_slot(Gate& gate, std::uint64_t cooldown_ms, std::uint6
 
 // Convenience wrappers (call from any module right before the paced HTTP action).
 // NOTE: these are the authoritative fleet gates. If the login module keeps its own
-// adonai::login::pace_dashboard / pace_http_login, those should forward here so the
+// nxrth::login::pace_dashboard / pace_http_login, those should forward here so the
 // whole fleet shares ONE cursor per phase (two gates = broken pacing).
 void pace_dashboard();    // wait_global_gate(dashboard_gate(), DASHBOARD_STAGGER_MS)
 void pace_http_login();   // wait_global_gate(http_login_gate(), HTTP_LOGIN_STAGGER_MS)
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

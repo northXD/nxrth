@@ -4,7 +4,7 @@
 
 #include "core/cursor.h"
 
-namespace adonai::world {
+namespace nxrth::world {
 
 Inventory Inventory::parse(const std::uint8_t* data, std::size_t len) {
     Cursor cur(data, len, "inventory");
@@ -99,4 +99,4 @@ bool Inventory::remove_temp_items() {
     return !to_remove.empty();
 }
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

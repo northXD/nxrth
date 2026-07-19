@@ -12,7 +12,7 @@
 /vcpkg_installed/
 
 # ImGui layout
-adonai_imgui.ini
+nxrth_imgui.ini
 
 # Local data / secrets
 /data/proxy_pool.json
@@ -21,6 +21,14 @@ adonai_imgui.ini
 /data/items.dat
 /items.dat
 *.log
+
+# Fleet backups (encrypted account tokens) + saved credential lists — never publish
+/data/fleets/
+*.fleet
+bots*.txt
+tokens*.txt
+*.token
+fresh_token*.txt
 
 # IDE
 .vs/

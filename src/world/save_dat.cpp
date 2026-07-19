@@ -6,7 +6,7 @@
 
 #include "core/cursor.h"
 
-namespace adonai::world {
+namespace nxrth::world {
 
 std::vector<std::uint8_t> xor_90210(const std::vector<std::uint8_t>& data) {
     static constexpr std::uint8_t KEY[5] = {'9', '0', '2', '1', '0'};
@@ -206,4 +206,4 @@ SaveDat SaveDat::parse(const std::uint8_t* data, std::size_t len) {
     return sd;
 }
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

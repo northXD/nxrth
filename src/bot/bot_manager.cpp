@@ -1,12 +1,13 @@
-// Adonai — BotManager implementation (port spec 09 §3.1-§3.17, §5).
+// Nxrth — BotManager implementation (port spec 09 §3.1-§3.17, §5).
 #include "bot/bot_manager.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
-#include "automation/automation.h"  // adonai::automation::build_all (native modules)
-#include "core/logger.h"      // adonai::log
-#include "world/items.h"      // adonai::world::ItemsDat::load
+#include "automation/automation.h"  // nxrth::automation::build_all (native modules)
+#include "core/logger.h"      // nxrth::log
+#include "world/items.h"      // nxrth::world::ItemsDat::load
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -15,15 +16,15 @@
 #include <windows.h>
 #endif
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 namespace {
 
-// Set the OS thread name to "adonai-bot-<id>" (spec §7: the only literal `mori`
+// Set the OS thread name to "nxrth-bot-<id>" (spec §7: the only literal `mori`
 // token renamed). Win32-only; a no-op elsewhere. First action on the new thread.
 void set_thread_name(std::uint32_t id) {
 #ifdef _WIN32
-    std::wstring name = L"adonai-bot-" + std::to_wstring(id);
+    std::wstring name = L"nxrth-bot-" + std::to_wstring(id);
     ::SetThreadDescription(::GetCurrentThread(), name.c_str());
 #else
     (void)id;
@@ -53,7 +54,7 @@ std::optional<std::string> proxy_key(const std::optional<Socks5Config>& proxy) {
 
 // §3.1 --------------------------------------------------------------------
 BotManager::BotManager(EventSinkPtr sink)
-    : items_dat_(std::make_shared<const adonai::world::ItemsDat>(adonai::world::ItemsDat::load())),
+    : items_dat_(std::make_shared<const nxrth::world::ItemsDat>(nxrth::world::ItemsDat::load())),
       sink_(std::move(sink)),
       fleet_(std::make_shared<FleetState>()) {}
 
@@ -91,6 +92,7 @@ void BotManager::reap_finished() {
         }
         if (sink_) sink_->bot_removed(id);
         if (fleet_) fleet_->erase(id);
+        if (launch_records_.erase(id) != 0) ++launch_generation_;
     }
 
     // Phase B — retired threads (stopped by the user). Swap-erase WITHOUT
@@ -113,19 +115,20 @@ void BotManager::reap_finished() {
 std::uint32_t BotManager::spawn_core(std::string entry_username, bool do_dedup,
                                      const std::string& dedup_name,
                                      std::optional<Socks5Config> proxy,
-                                     std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
-                                     BotFactory make_bot) {
+                                     std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
+                                     LaunchRecord launch_record, BotFactory make_bot) {
     reap_finished();
 
     if (do_dedup) {
         if (auto existing = find_id_by_name(dedup_name)) {
-            adonai::log("[Manager] Skipped '" + dedup_name + "' — already loaded as bot " +
+            nxrth::log("[Manager] Skipped '" + dedup_name + "' — already loaded as bot " +
                         std::to_string(*existing) + ".");
             return *existing;
         }
     }
 
     const std::uint32_t id = next_id_++;
+    launch_record.id = id;
 
     auto stop_flag = std::make_shared<std::atomic<bool>>(false);
     auto state = std::make_shared<SharedBotState>();  // BotState default: status Connecting
@@ -153,14 +156,14 @@ std::uint32_t BotManager::spawn_core(std::string entry_username, bool do_dedup,
                 // Attach every native automation module. Each self-gates per tick
                 // on the shared FleetState's AutomationConfig (UI toggles enable
                 // them live), so attaching all of them once is correct. This is
-                // Adonai's fleet-aware automation seam — replaces Mori's per-bot Lua.
-                for (auto& mod : adonai::automation::build_all())
+                // Nxrth's fleet-aware automation seam — replaces Mori's per-bot Lua.
+                for (auto& mod : nxrth::automation::build_all())
                     bot->add_automation_module(std::move(mod));
                 bot->run(stop_flag);  // blocking main loop until stopped/disconnected
             }
-            adonai::log("[Bot:" + std::to_string(id) + "] Stopped.", static_cast<int>(id));
+            nxrth::log("[Bot:" + std::to_string(id) + "] Stopped.", static_cast<int>(id));
         } catch (...) {
-            adonai::log("[Bot:" + std::to_string(id) + "] Crashed.", static_cast<int>(id));
+            nxrth::log("[Bot:" + std::to_string(id) + "] Crashed.", static_cast<int>(id));
         }
         // Late try_sends must fail rather than leak; then mark finished LAST.
         queue->close_consumer();
@@ -170,6 +173,8 @@ std::uint32_t BotManager::spawn_core(std::string entry_username, bool do_dedup,
     std::string added_username = entry_username;
     bots.emplace(id, BotEntry{std::move(entry_username), std::move(assigned_proxy_key), stop_flag,
                               state, queue, done, std::move(th)});
+    launch_records_.insert_or_assign(id, std::move(launch_record));
+    ++launch_generation_;
 
     if (sink_) sink_->bot_added(id, added_username);
     return id;
@@ -178,52 +183,47 @@ std::uint32_t BotManager::spawn_core(std::string entry_username, bool do_dedup,
 // §3.3 --------------------------------------------------------------------
 std::uint32_t BotManager::spawn(const std::string& username, const std::string& password,
                                 std::optional<Socks5Config> proxy,
-                                std::optional<adonai::proxy::RotatingLoginProxy> login_proxy) {
-    BotFactory factory;
-    if (username.find('|') != std::string::npos) {
-        factory = [ltoken = username](auto pr, auto lp, auto stop, auto st, auto rx, auto it,
-                                      std::uint32_t id, auto sk, auto fl) {
-            return Bot::create_ltoken(ltoken, std::move(pr), std::move(lp), stop, st,
-                                      std::move(rx), it, id, sk, fl);
-        };
-    } else {
-        factory = [uname = username, pass = password](auto pr, auto lp, auto stop, auto st,
-                                                      auto rx, auto it, std::uint32_t id, auto sk,
-                                                      auto fl) {
-            return Bot::create(uname, pass, std::move(pr), std::move(lp), stop, st, std::move(rx),
-                               it, id, sk, fl);
-        };
-    }
-    return spawn_core(username, /*do_dedup=*/true, username, std::move(proxy),
-                      std::move(login_proxy), std::move(factory));
-}
+                                std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
+                                ProxyPolicy proxy_policy) {
+    LaunchRecord launch_record;
+    launch_record.credential_kind = LaunchCredentialKind::GrowId;
+    launch_record.credential = username;
+    launch_record.password = password;
+    launch_record.proxy_policy = proxy_policy;
+    if (proxy_policy == ProxyPolicy::Custom) launch_record.custom_proxy = proxy;
+    launch_record.rotating_login_requested = login_proxy.has_value();
 
-// §3.5 — NO ltoken branch: always create_newly, even if username contains '|'.
-std::uint32_t BotManager::spawn_newly(
-    const std::string& username, const std::string& password,
-    std::optional<Socks5Config> proxy,
-    std::optional<adonai::proxy::RotatingLoginProxy> login_proxy) {
-    BotFactory factory = [uname = username, pass = password](auto pr, auto lp, auto stop, auto st,
-                                                             auto rx, auto it, std::uint32_t id,
-                                                             auto sk, auto fl) {
-        return Bot::create_newly(uname, pass, std::move(pr), std::move(lp), stop, st,
-                                 std::move(rx), it, id, sk, fl);
+    BotFactory factory = [uname = username, pass = password](
+                             auto pr, auto lp, auto stop, auto st, auto rx, auto it,
+                             std::uint32_t id, auto sk, auto fl) {
+        return Bot::create(uname, pass, std::move(pr), std::move(lp), stop, st, std::move(rx), it,
+                           id, sk, fl);
     };
     return spawn_core(username, /*do_dedup=*/true, username, std::move(proxy),
-                      std::move(login_proxy), std::move(factory));
+                      std::move(login_proxy), std::move(launch_record), std::move(factory));
 }
 
-// §3.6 — no dedup; empty entry username (never matches find_id_by_name).
+// No dedup; provider records may still supply a display name.
 std::uint32_t BotManager::spawn_ltoken(
     const std::string& ltoken_str, std::optional<Socks5Config> proxy,
-    std::optional<adonai::proxy::RotatingLoginProxy> login_proxy) {
+    std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
+    ProxyPolicy proxy_policy) {
+    const auto parsed = parse_ltoken_string(ltoken_str);
+    const std::string display_name = parsed && parsed->name ? *parsed->name : std::string{};
+    LaunchRecord launch_record;
+    launch_record.credential_kind = LaunchCredentialKind::Ltoken;
+    launch_record.credential = ltoken_str;
+    launch_record.proxy_policy = proxy_policy;
+    if (proxy_policy == ProxyPolicy::Custom) launch_record.custom_proxy = proxy;
+    launch_record.rotating_login_requested = login_proxy.has_value();
+
     BotFactory factory = [ltoken = ltoken_str](auto pr, auto lp, auto stop, auto st, auto rx,
                                                auto it, std::uint32_t id, auto sk, auto fl) {
         return Bot::create_ltoken(ltoken, std::move(pr), std::move(lp), stop, st, std::move(rx),
                                   it, id, sk, fl);
     };
-    return spawn_core(std::string{}, /*do_dedup=*/false, std::string{}, std::move(proxy),
-                      std::move(login_proxy), std::move(factory));
+    return spawn_core(display_name, /*do_dedup=*/false, display_name, std::move(proxy),
+                      std::move(login_proxy), std::move(launch_record), std::move(factory));
 }
 
 // §3.8 — non-blocking stop.
@@ -245,6 +245,7 @@ bool BotManager::stop(std::uint32_t id) {
 
     if (sink_) sink_->bot_removed(id);   // emit immediately (UI stays responsive)
     if (fleet_) fleet_->erase(id);
+    if (launch_records_.erase(id) != 0) ++launch_generation_;
     return true;
 }
 
@@ -331,4 +332,17 @@ std::unordered_map<std::string, std::size_t> BotManager::proxy_key_counts() cons
     return counts;
 }
 
-}  // namespace adonai::bot
+std::vector<LaunchRecord> BotManager::launch_records() const {
+    std::vector<LaunchRecord> records;
+    records.reserve(launch_records_.size());
+    for (const auto& [id, record] : launch_records_) {
+        (void)id;
+        records.push_back(record);
+    }
+    std::sort(records.begin(), records.end(), [](const LaunchRecord& a, const LaunchRecord& b) {
+        return a.id < b.id;
+    });
+    return records;
+}
+
+}  // namespace nxrth::bot

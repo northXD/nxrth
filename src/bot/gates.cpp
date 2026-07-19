@@ -1,10 +1,10 @@
-// Adonai — process-global fleet stagger gates (port specs 06 §2.1 / 07 §2.12).
+// Nxrth — process-global fleet stagger gates (port specs 06 §2.1 / 07 §2.12).
 #include "bot/gates.h"
 
 #include <algorithm>
 #include <thread>
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -62,4 +62,4 @@ SteadyTp reserve_throttle_slot(Gate& gate, std::uint64_t cooldown_ms, std::uint6
 void pace_dashboard() { wait_global_gate(dashboard_gate(), DASHBOARD_STAGGER_MS); }
 void pace_http_login() { wait_global_gate(http_login_gate(), HTTP_LOGIN_STAGGER_MS); }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

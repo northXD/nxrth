@@ -1,8 +1,8 @@
-// Adonai — fleet coordination automation module + shared claim helpers.
+// Nxrth — fleet coordination automation module + shared claim helpers.
 //
 // Ported intent: Mori's per-bot Lua `rotation.pool*` API (port spec 11 §6.5) —
 // bots claim/release farm worlds from a shared pool so the fleet spreads out
-// instead of colliding on the same world/target. In Adonai there is NO Lua: the
+// instead of colliding on the same world/target. In Nxrth there is NO Lua: the
 // shared pool is the process-wide FleetState (bot/fleet_state.h), and this native
 // module drives each Bot through its public action helpers (bot/bot.h) while
 // coordinating via FleetState::claim/release/owner.
@@ -18,10 +18,10 @@
 #include <string_view>
 #include <vector>
 
-#include "bot/bot.h"          // adonai::bot::{AutomationModule, BotContext, Bot}
-#include "bot/fleet_state.h"  // adonai::bot::{FleetState, AutomationConfig}
+#include "bot/bot.h"          // nxrth::bot::{AutomationModule, BotContext, Bot}
+#include "bot/fleet_state.h"  // nxrth::bot::{FleetState, AutomationConfig}
 
-namespace adonai::automation {
+namespace nxrth::automation {
 
 // ---------------------------------------------------------------------------
 // Shared claim-key builders (the fleet's coordination vocabulary). All modules
@@ -34,8 +34,8 @@ std::string world_claim_key(std::string_view world);
 
 // Thin, reusable claim/release wrappers (any module: "claim a target before
 // working it"). claim_target returns true iff the caller now owns `key`.
-bool claim_target(adonai::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id);
-void release_target(adonai::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id);
+bool claim_target(nxrth::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id);
+void release_target(nxrth::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id);
 
 // ASCII case-insensitive compare / upper (GT world names are uppercase on the
 // wire; config-supplied names are normalized to match).
@@ -54,7 +54,7 @@ std::vector<WorldTarget> parse_world_list(const std::string& csv);
 // ---------------------------------------------------------------------------
 // CoordinateModule — spreads the fleet across a configured set of worlds.
 //
-// Config (AutomationConfig, read each tick via FleetState::config_snapshot):
+// Config (shared immutable AutomationConfig passed by Bot::run_automation):
 //   enabled["coordinate"] = true         -> module runs (gated by run_automation)
 //   params ["coordinate_worlds"]         -> "WORLDA|door, WORLDB, ..."
 //
@@ -64,16 +64,17 @@ std::vector<WorldTarget> parse_world_list(const std::string& csv);
 // claim. A dead/reaped bot's claims are freed by FleetState::release_all, so a
 // hung bot's world frees up for the rest of the fleet.
 // ---------------------------------------------------------------------------
-class CoordinateModule : public adonai::bot::AutomationModule {
+class CoordinateModule : public nxrth::bot::AutomationModule {
 public:
     static constexpr const char* kName = "coordinate";
 
     const char* name() const override { return kName; }
-    void tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) override;
+    void tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+              const nxrth::bot::AutomationConfig& config) override;
 
 private:
     std::string claimed_world_;  // "world:" key currently owned (uppercased world)
     std::chrono::steady_clock::time_point last_warp_{};
 };
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

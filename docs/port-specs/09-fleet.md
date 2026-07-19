@@ -1,12 +1,12 @@
-# Adonai Port Spec — Module 09: Fleet (BotManager + BotState)
+# Nxrth Port Spec — Module 09: Fleet (BotManager + BotState)
 
 **Source of truth (Rust):**
 - `src/bot_manager.rs` (Mori 2.0.0) — the fleet supervisor: spawns one OS thread per bot, tracks them in a map, reaps finished threads, routes commands, counts proxy capacity.
 - `src/bot_state.rs` (Mori 2.0.0) — the shared per-bot state snapshot (`BotState`), status enum, command enum, and supporting value types.
 
-This document is the **single source of truth** for the C++ (Adonai) reimplementation of this module. An engineer must be able to build it **without reading the Rust**. Cross-module types (`Socks5Config`, `RotatingLoginProxy`, `WsTx`/`WsEvent`, `ItemsDat`, `TileType`, `Bot`) are defined in *other* modules; here they are described only by the interface this module actually uses, and are cross-referenced to their own port specs.
+This document is the **single source of truth** for the C++ (Nxrth) reimplementation of this module. An engineer must be able to build it **without reading the Rust**. Cross-module types (`Socks5Config`, `RotatingLoginProxy`, `WsTx`/`WsEvent`, `ItemsDat`, `TileType`, `Bot`) are defined in *other* modules; here they are described only by the interface this module actually uses, and are cross-referenced to their own port specs.
 
-> **Naming:** all `Mori`/`mori` → `Adonai`/`adonai`; all `Cloei`/`cloei` → `North`/`north`. Applied throughout this spec. See §7 for the concrete occurrences found in these two files. (No `Cloei`/`cloei` tokens exist in either file; the only literal `mori` token is the thread name prefix.)
+> **Naming:** all `Mori`/`mori` → `Nxrth`/`nxrth`; all `Cloei`/`cloei` → `North`/`north`. Applied throughout this spec. See §7 for the concrete occurrences found in these two files. (No `Cloei`/`cloei` tokens exist in either file; the only literal `mori` token is the thread name prefix.)
 
 ---
 
@@ -14,7 +14,7 @@ This document is the **single source of truth** for the C++ (Adonai) reimplement
 
 `BotManager` owns the whole fleet. Each running bot lives on its **own OS thread**; the manager keeps a `BotEntry` per bot in a `HashMap<u32, BotEntry>` keyed by a **monotonic, never-reused `u32` id**. Each bot exposes exactly three shared handles back to the manager: a **stop flag** (`atomic bool`), a **live state snapshot** (`RwLock<BotState>`) that the bot writes and the UI reads, and a **command channel sender** (`mpsc`) the UI uses to push actions into the bot. The manager never touches ENet/game logic — it only supervises lifecycle (spawn / stop / reap), fans out commands, exposes read views (`list`, `get_state`), and counts how many bots sit behind each proxy endpoint (`proxy_key_counts`). Panics inside a bot are caught per-thread (`catch_unwind`) so one crashing bot never takes down the fleet.
 
-There is **no binary/on-disk wire format in this module.** The structs derive `serde` for JSON (Mori's web UI); Adonai has no web server, so these become plain C++ structs read directly by Dear ImGui. The one struct that is genuinely (de)serialized to disk is `BotDelays` (config) — its JSON field names are documented in §1.9 for config compatibility.
+There is **no binary/on-disk wire format in this module.** The structs derive `serde` for JSON (Mori's web UI); Nxrth has no web server, so these become plain C++ structs read directly by Dear ImGui. The one struct that is genuinely (de)serialized to disk is `BotDelays` (config) — its JSON field names are documented in §1.9 for config compatibility.
 
 ---
 
@@ -23,7 +23,7 @@ There is **no binary/on-disk wire format in this module.** The structs derive `s
 ### Serde/JSON conventions used in `bot_state.rs`
 - All enums here use `#[serde(rename_all = "snake_case")]`, so serialized enum *values* are lower_snake_case (`in_game`, `rapid_green`, …).
 - `BotState`, `BotInfo`, and all sub-structs use `#[derive(Serialize)]` — field names serialize verbatim (already snake_case) **except** `GeigerSignal.area_type` which is renamed to `"type"` on the wire.
-- In Adonai these are C++ structs; keep the JSON field/value names in §1.9 only if you retain any JSON (config load/save of `BotDelays`, or an optional tooling export). The UI reads the C++ fields directly.
+- In Nxrth these are C++ structs; keep the JSON field/value names in §1.9 only if you retain any JSON (config load/save of `BotDelays`, or an optional tooling export). The UI reads the C++ fields directly.
 
 ---
 
@@ -130,7 +130,7 @@ Derives: `Clone, Serialize, **Deserialize**`. Has explicit `Default`.
 | `too_many_logins_secs` | `u64` | **5** |
 | `maintenance_secs` | `u64` | **600** |
 
-These are the concrete retry/pacing constants referenced by the `BotStatus` doc-comments. **Preserve every default exactly.** Because this derives `Deserialize`, it is loaded from config JSON; in Adonai use `nlohmann/json` with these exact keys so existing config files remain readable, or persist via ImGui settings — but keep the defaults byte-for-byte.
+These are the concrete retry/pacing constants referenced by the `BotStatus` doc-comments. **Preserve every default exactly.** Because this derives `Deserialize`, it is loaded from config JSON; in Nxrth use `nlohmann/json` with these exact keys so existing config files remain readable, or persist via ImGui settings — but keep the defaults byte-for-byte.
 
 **C++:**
 ```cpp
@@ -257,10 +257,10 @@ private:
     std::vector<std::thread> retired_threads_;
 public:
     std::shared_ptr<ItemsDat> items_dat;   // ItemsDat::load() once
-    EventSink                 ws_tx;        // see §4: not a web socket in Adonai
+    EventSink                 ws_tx;        // see §4: not a web socket in Nxrth
 };
 ```
-> `BotManager` has **no internal lock**. In Mori it lives inside the axum app state behind a `Mutex`/`RwLock`. In Adonai it must be owned by the UI thread or wrapped in a `std::mutex` — see §5. All public methods assume single-threaded access to the manager's own fields.
+> `BotManager` has **no internal lock**. In Mori it lives inside the axum app state behind a `Mutex`/`RwLock`. In Nxrth it must be owned by the UI thread or wrapped in a `std::mutex` — see §5. All public methods assume single-threaded access to the manager's own fields.
 
 ### 1.15 `BotInfo` (struct) — `bot_manager.rs`
 Derives `serde::Serialize`. A flattened read-only view row for the UI table, produced by `list()`.
@@ -371,7 +371,7 @@ For adding a bot from a captured HAR file (extracts the token from an exported b
   - `BotEntry.username = "HAR_TOKEN_BOT"` (literal), and `BotAdded.username = "HAR_TOKEN_BOT"`.
 - No dedup check. Thread name `mori-bot-{id}`.
 
-> **Caveat:** because all HAR bots share the literal username `"HAR_TOKEN_BOT"`, `find_id_by_name("HAR_TOKEN_BOT")` / `stop_by_name` would collide across multiple HAR bots (matches the first found). This is pre-existing Mori behavior; preserve it unless Adonai deliberately fixes it.
+> **Caveat:** because all HAR bots share the literal username `"HAR_TOKEN_BOT"`, `find_id_by_name("HAR_TOKEN_BOT")` / `stop_by_name` would collide across multiple HAR bots (matches the first found). This is pre-existing Mori behavior; preserve it unless Nxrth deliberately fixes it.
 
 ### 3.8 `stop(&mut self, id: u32) -> bool`  — non-blocking stop
 1. `reap_finished()`.
@@ -445,19 +445,19 @@ The thread **moves** `proxy`, `login_proxy_url`, `cmd_rx`, `items_dat` (Arc), `w
 
 ---
 
-## 3. DEPENDENCY MAPPING (Rust crate/feature → Adonai C++)
+## 3. DEPENDENCY MAPPING (Rust crate/feature → Nxrth C++)
 
-| Rust (in these files) | Adonai C++ | Notes for this module |
+| Rust (in these files) | Nxrth C++ | Notes for this module |
 |---|---|---|
-| `std::thread::Builder` (named, `stack_size`) | `std::thread` | C++ can't set stack size or name portably via `std::thread`; use platform hooks: on Win32 name via `SetThreadDescription(L"adonai-bot-<id>")`; set stack size via a `boost::thread`/`std::thread` with an attribute shim or accept the default (1 MiB is small — the OS default is usually larger, which is fine). Preserve the **name string** `adonai-bot-<id>`. |
+| `std::thread::Builder` (named, `stack_size`) | `std::thread` | C++ can't set stack size or name portably via `std::thread`; use platform hooks: on Win32 name via `SetThreadDescription(L"nxrth-bot-<id>")`; set stack size via a `boost::thread`/`std::thread` with an attribute shim or accept the default (1 MiB is small — the OS default is usually larger, which is fine). Preserve the **name string** `nxrth-bot-<id>`. |
 | `std::panic::catch_unwind` + `AssertUnwindSafe` | `try { … } catch (...) {}` around the whole thread body | One bot's exception must never call `std::terminate`. Print `"[Bot:<id>] Crashed."` in the catch, `"[Bot:<id>] Stopped."` on normal return. |
 | `std::sync::mpsc::{Sender,Receiver}` (unbounded MPSC) | **`std::mutex` + `std::condition_variable` queue** (the "crossbeam-channel → mutex+condvar" rule) | See §3.14 contract. Unbounded FIFO, multi-producer, single-consumer, closable. |
 | `Arc<T>` | `std::shared_ptr<T>` | ref-counted shared ownership (`items_dat`, `stop_flag`, `state`, `ws_tx` clones). |
 | `RwLock<BotState>` | `std::shared_mutex` guarding a `BotState` (wrap as `SharedBotState`) | many readers (UI), one writer (bot thread). No poisoning in C++. |
 | `AtomicBool` (`Ordering::Relaxed`) | `std::atomic<bool>` (use `memory_order_relaxed` to match, or `seq_cst` for safety) | stop flag. |
 | `HashMap<u32,_>` / `HashMap<String,usize>` | `std::unordered_map` | bot registry / proxy counts. |
-| `serde::Serialize` / `Deserialize` | `nlohmann/json` **only where JSON is actually needed** | Adonai has no web server (tokio/axum/tower → `std::thread` + Dear ImGui). The only real (de)serialization is `BotDelays` config; everything else is read straight by ImGui. Keep the JSON key/value names from §1 if you persist `BotDelays`. |
-| `ureq`/`reqwest`, `mlua`, `scraper`, `rusty_enet`, `md5`, `argon2` | libcurl(socks5h,cookies) / **native C++ (no Lua)** / regex+manual HTML / vendored patched ENet / bundled md5 / argon2 lib | **Not used in these two files** — they belong to the `bot`/login/proxy modules. `RunScript{content}` here is just an opaque string routed to the bot; in Adonai the "script" engine is **native C++**, not Lua — the command payload stays a `std::string` but the executor is rewritten (see the bot/script port spec). |
+| `serde::Serialize` / `Deserialize` | `nlohmann/json` **only where JSON is actually needed** | Nxrth has no web server (tokio/axum/tower → `std::thread` + Dear ImGui). The only real (de)serialization is `BotDelays` config; everything else is read straight by ImGui. Keep the JSON key/value names from §1 if you persist `BotDelays`. |
+| `ureq`/`reqwest`, `mlua`, `scraper`, `rusty_enet`, `md5`, `argon2` | libcurl(socks5h,cookies) / **native C++ (no Lua)** / regex+manual HTML / vendored patched ENet / bundled md5 / argon2 lib | **Not used in these two files** — they belong to the `bot`/login/proxy modules. `RunScript{content}` here is just an opaque string routed to the bot; in Nxrth the "script" engine is **native C++**, not Lua — the command payload stays a `std::string` but the executor is rewritten (see the bot/script port spec). |
 | `WsTx` broadcast (tokio/axum) | in-process `EventSink` (see §4) | `BotAdded`/`BotRemoved` become UI notifications / fleet-registry mutations, **not** websocket frames. |
 
 ---
@@ -465,13 +465,13 @@ The thread **moves** `proxy`, `login_proxy_url`, `cmd_rx`, `items_dat` (Arc), `w
 ## 4. THREADING & SHARED STATE
 
 ### 5.1 Current Mori model (must be reproduced faithfully)
-- **One OS thread per bot.** Spawned with name `mori-bot-<id>` (→ `adonai-bot-<id>`) and a **1 MiB stack**. The thread owns the `Bot` object and runs `bot.run(stop_flag)` until stopped or disconnected.
+- **One OS thread per bot.** Spawned with name `mori-bot-<id>` (→ `nxrth-bot-<id>`) and a **1 MiB stack**. The thread owns the `Bot` object and runs `bot.run(stop_flag)` until stopped or disconnected.
 - **Panic isolation:** each thread body is wrapped in `catch_unwind`; a panic prints `"[Bot:<id>] Crashed."` and the thread ends cleanly. The fleet keeps running.
 - **Three shared handles per bot** bridge thread ↔ manager/UI:
   1. `stop_flag: Arc<AtomicBool>` — UI sets it (`stop`); bot polls it in `run`.
   2. `state: Arc<RwLock<BotState>>` — **bot is the sole writer**, UI/manager are readers (`list`, `get_state`). Reads are poison-tolerant.
   3. `cmd_tx/cmd_rx: mpsc` — UI/manager are producers, bot is the single consumer.
-- **The `BotManager` itself is not internally synchronized.** In Mori it's held in axum shared state behind an outer lock. **Adonai must own it on the UI thread or wrap it in a `std::mutex`.** Every `spawn*/stop/list/reap` call mutates `bots`/`retired_threads`/`next_id` and must be serialized.
+- **The `BotManager` itself is not internally synchronized.** In Mori it's held in axum shared state behind an outer lock. **Nxrth must own it on the UI thread or wrap it in a `std::mutex`.** Every `spawn*/stop/list/reap` call mutates `bots`/`retired_threads`/`next_id` and must be serialized.
 - **Lifecycle / reaping is cooperative and non-blocking:**
   - A bot that ends on its own → thread finishes → next `reap_finished` (Phase A) joins it, removes it, emits `BotRemoved`.
   - A user `stop()` → removes it immediately, signals it (Disconnect + atomic), parks the handle in `retired_threads`, emits `BotRemoved` right away; the join happens later in `reap_finished` (Phase B). This keeps the UI responsive — `stop` never blocks on ENet teardown.
@@ -502,8 +502,8 @@ using CmdSender = std::shared_ptr<CommandQueue<BotCommand>>;
 - The bot thread must `close_consumer()` on exit so late `try_send`s fail rather than leak.
 - `stop()` must both `try_send(Disconnect)` (wakes a queue-blocked bot) **and** set the atomic (wakes a run-loop-spinning bot).
 
-### 5.3 Evolving into a **shared fleet** (Adonai requirement: bots must see each other)
-Today bots are isolated — no bot can observe another; only the manager has the global view. Adonai needs a **shared fleet state** that every bot thread can read (and minimally write). Recommended design:
+### 5.3 Evolving into a **shared fleet** (Nxrth requirement: bots must see each other)
+Today bots are isolated — no bot can observe another; only the manager has the global view. Nxrth needs a **shared fleet state** that every bot thread can read (and minimally write). Recommended design:
 
 ```cpp
 // One instance, owned by BotManager, shared_ptr handed to every bot.
@@ -538,41 +538,41 @@ Wiring:
 - **This subsumes `proxy_key_counts()`**: `FleetState::count_on_proxy` gives the same capacity number, now readable by *any* bot (not just the manager), enabling peer-aware proxy selection. Keep `BotManager::proxy_key_counts()` too (it's the authoritative, map-derived count) but derive UI/coordination from `FleetState` for bot-to-bot awareness.
 - Concurrency: `FleetState` is the one **many-writer, many-reader** structure — use `std::shared_mutex` (writes = `upsert`/`erase`, reads = `snapshot`/`in_world`/`count_on_proxy`). Keep the critical sections tiny (copy in/out, no bot logic under the lock) to avoid contention as fleet size grows.
 - **Scaling note (from prior Mori experience):** as bot count grows, per-tick global work must stay O(1)/bot. `upsert` is O(1); avoid any per-tick `snapshot()` of the whole fleet inside hot paths. Onboarding/geiger CPU load already stresses the fleet, so keep the shared-state writes lock-cheap and batched to one per tick.
-- **The `EventSink` (former `WsTx`)** in Adonai is just an in-process notifier the UI polls; `BotAdded{bot_id,username}`/`BotRemoved{bot_id}` become fleet-registry mutations + a UI dirty flag, **not** websocket frames. Keep the two event shapes so the ImGui layer can react.
+- **The `EventSink` (former `WsTx`)** in Nxrth is just an in-process notifier the UI polls; `BotAdded{bot_id,username}`/`BotRemoved{bot_id}` become fleet-registry mutations + a UI dirty flag, **not** websocket frames. Keep the two event shapes so the ImGui layer can react.
 
-### 5.4 Manager ownership in Adonai
+### 5.4 Manager ownership in Nxrth
 Wrap `BotManager` in `std::mutex` (or own it solely on the ImGui thread). All `spawn*`, `stop`, `stop_by_name`, `list`, `reap_finished`, `get_state`, `send_cmd`, `run_script`, `find_*`, `proxy_key_counts` mutate/iterate manager-owned fields and must run under that single lock. The per-bot `SharedBotState`/`CommandQueue`/`FleetState` have their **own** finer-grained locks and are safe to touch without the manager lock once you hold a `shared_ptr` to them (that's exactly what `find_by_name` hands out).
 
 ---
 
 ## 5. RENAME RULES — concrete occurrences in these two files
 
-`Mori`/`mori` → `Adonai`/`adonai`; `Cloei`/`cloei` → `North`/`north`.
+`Mori`/`mori` → `Nxrth`/`nxrth`; `Cloei`/`cloei` → `North`/`north`.
 
 **`bot_manager.rs`:**
-- Thread name literal `format!("mori-bot-{id}")` → `format!("adonai-bot-{id}")`. **Occurs 5×** — once each in `spawn`, `spawn_requestly`, `spawn_newly`, `spawn_ltoken`, `spawn_har_token`. This is the **only** literal `mori` token in the file. Preserve the format (`adonai-bot-<id>`) as the OS thread name (Win32 `SetThreadDescription`).
-- Log tags `"[Manager] …"`, `"[Bot:{id}] Stopped."`, `"[Bot:{id}] Crashed."` contain **no** Mori/Cloei token — leave verbatim (or optionally namespace `[Manager]`→`[Adonai/Manager]`, not required).
+- Thread name literal `format!("mori-bot-{id}")` → `format!("nxrth-bot-{id}")`. **Occurs 5×** — once each in `spawn`, `spawn_requestly`, `spawn_newly`, `spawn_ltoken`, `spawn_har_token`. This is the **only** literal `mori` token in the file. Preserve the format (`nxrth-bot-<id>`) as the OS thread name (Win32 `SetThreadDescription`).
+- Log tags `"[Manager] …"`, `"[Bot:{id}] Stopped."`, `"[Bot:{id}] Crashed."` contain **no** Mori/Cloei token — leave verbatim (or optionally namespace `[Manager]`→`[Nxrth/Manager]`, not required).
 
 **`bot_state.rs`:**
 - **No `Mori`/`mori`/`Cloei`/`cloei` tokens present.** Nothing to rename in this file.
 
-**Not present in either file (so nothing to change here, but watch for them when this module is wired up elsewhere):** user-agent strings, config filenames, window titles, URL paths, `Cloei`/`cloei` author strings. If the config file that persists `BotDelays` is named after Mori elsewhere (e.g. `mori.json`/`mori_config.*`), rename to `adonai.*` in that module.
+**Not present in either file (so nothing to change here, but watch for them when this module is wired up elsewhere):** user-agent strings, config filenames, window titles, URL paths, `Cloei`/`cloei` author strings. If the config file that persists `BotDelays` is named after Mori elsewhere (e.g. `mori.json`/`mori_config.*`), rename to `nxrth.*` in that module.
 
 ---
 
-## 6. Implementation checklist (Adonai)
+## 6. Implementation checklist (Nxrth)
 
 1. Port all §1 value types as plain C++ structs/enums with the **exact** field names, types, and defaults (esp. `BotDelays` numbers and `BotState`'s `auto_collect=true`, `collect_radius_tiles=3`, `auto_reconnect=true`).
 2. Implement `BotStatus`/`GeigerArea` string mappings exactly (used by the UI status column).
 3. Implement `CommandQueue<BotCommand>` (§3.14) — MPSC, unbounded, closable.
 4. Implement `SharedBotState` = `shared_mutex`-guarded `BotState`.
 5. Implement `BotManager` with a monotonic `next_id`, `unordered_map<uint32_t,BotEntry>`, `retired_threads_`, and the exact `reap_finished` two-phase logic (Phase A joins+erases+emits `BotRemoved`; Phase B swap-erases retired threads).
-6. Implement all `spawn*` variants with: `reap_finished` first, dedup via `find_id_by_name` (only `spawn`/`spawn_requestly`/`spawn_newly`), the `'|'` ltoken auto-detect in `spawn`/`spawn_requestly` only, the correct `Bot::new_*` selection, thread name `adonai-bot-<id>`, per-thread `try/catch`, and the `BotAdded` emit. Empty username for ltoken bots, `"HAR_TOKEN_BOT"` for HAR bots.
+6. Implement all `spawn*` variants with: `reap_finished` first, dedup via `find_id_by_name` (only `spawn`/`spawn_requestly`/`spawn_newly`), the `'|'` ltoken auto-detect in `spawn`/`spawn_requestly` only, the correct `Bot::new_*` selection, thread name `nxrth-bot-<id>`, per-thread `try/catch`, and the `BotAdded` emit. Empty username for ltoken bots, `"HAR_TOKEN_BOT"` for HAR bots.
 7. Implement `stop` (non-blocking: Disconnect + atomic + park handle + immediate `BotRemoved`), `list`, `get_state`, `send_cmd`, `run_script`, `find_id_by_name` (ASCII case-insensitive, empty→none), `find_by_name`, `stop_by_name`, `proxy_key_counts`, and the free `proxy_key` (`"ip:port"`).
 8. Add the §5.3 `FleetState` shared registry and thread it into every bot so bots can see each other; keep it consistent with `bots` on spawn/stop/reap.
 9. Own `BotManager` under a single `std::mutex` (or the ImGui thread); keep per-bot locks separate.
-10. Apply the §7 renames (`adonai-bot-<id>` ×5).
+10. Apply the §7 renames (`nxrth-bot-<id>` ×5).
 ```
 ```
 
-**Files:** the spec is written to `C:/Users/ebuxd/OneDrive/Masaüstü/Adonai/docs/port-specs/09-fleet.md`.
+**Files:** the spec is written to `C:/Users/ebuxd/OneDrive/Masaüstü/Nxrth/docs/port-specs/09-fleet.md`.

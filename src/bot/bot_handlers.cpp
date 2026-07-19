@@ -1,4 +1,4 @@
-// Adonai — Bot packet-handler half (port spec 07 §2.2-§2.11).
+// Nxrth — Bot packet-handler half (port spec 07 §2.2-§2.11).
 // service_once ENet pump + Connect/Disconnect state machine, IncomingPacket
 // dispatch, ServerHello / login+redirect packet builders, ping reply, and the
 // CallFunction dispatch (incl. OnSendToServer redirect capture + OnSpawn self).
@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,15 +22,15 @@
 #include "world/inventory.h"
 #include "world/world.h"
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 namespace {
 
-using adonai::protocol::GameUpdatePacket;
-using adonai::protocol::GamePacketType;
-using adonai::protocol::IncomingPacket;
-using adonai::protocol::Variant;
-using adonai::protocol::VariantList;
+using nxrth::protocol::GameUpdatePacket;
+using nxrth::protocol::GamePacketType;
+using nxrth::protocol::IncomingPacket;
+using nxrth::protocol::Variant;
+using nxrth::protocol::VariantList;
 using Clock = std::chrono::steady_clock;
 
 constexpr std::uint8_t kPT(GamePacketType t) { return static_cast<std::uint8_t>(t); }
@@ -186,13 +187,13 @@ std::string hex_dump(const std::vector<std::uint8_t>& data) {
 void Bot::service_once() {
     while (auto ev = host_.next_event()) {
         switch (ev->type) {
-            case adonai::net::HostEvent::Type::Connect:
+            case nxrth::net::HostEvent::Type::Connect:
                 on_connect(ev->peer);
                 break;
-            case adonai::net::HostEvent::Type::Disconnect:
+            case nxrth::net::HostEvent::Type::Disconnect:
                 on_disconnect(ev->peer, ev->data);
                 break;
-            case adonai::net::HostEvent::Type::Receive:
+            case nxrth::net::HostEvent::Type::Receive:
                 on_receive(ev->peer, ev->channel_id, ev->packet);
                 break;
         }
@@ -200,13 +201,15 @@ void Bot::service_once() {
 }
 
 // --- Receive — incoming packet dispatch ------------------------------------
-void Bot::on_receive(adonai::net::PeerId id, std::uint8_t channel,
+void Bot::on_receive(nxrth::net::PeerId id, std::uint8_t channel,
                      const std::vector<std::uint8_t>& data) {
     const std::size_t size = data.size();
     auto parsed = IncomingPacket::parse(data);
     if (!parsed) {
         std::string hex = hex_dump(data);
-        emit_traffic("in", "parse_error", size, "channel=" + std::to_string(channel) + "\n" + hex);
+        if (wants_traffic())
+            emit_traffic("in", "parse_error", size,
+                         "channel=" + std::to_string(channel) + "\n" + hex);
         log_console("[Bot] Failed to parse packet (" + std::to_string(size) + " bytes on ch " +
                     std::to_string(channel) + "): " + hex);
         return;
@@ -214,25 +217,28 @@ void Bot::on_receive(adonai::net::PeerId id, std::uint8_t channel,
 
     switch (parsed->type) {
         case IncomingPacket::Type::ServerHello:
-            emit_traffic("in", "server_hello", size, "ServerHello");
+            if (wants_traffic()) emit_traffic("in", "server_hello", size, "ServerHello");
             on_server_hello();
             break;
 
         case IncomingPacket::Type::Text:
-            emit_traffic("in", "text", size, redact_packet_text(parsed->text));
+            if (wants_traffic())
+                emit_traffic("in", "text", size, redact_packet_text(parsed->text));
             log_console("[Bot] Text: " + parsed->text);
             break;
 
         case IncomingPacket::Type::GameMessage:
-            emit_traffic("in", "game_message", size, redact_packet_text(parsed->text));
+            if (wants_traffic())
+                emit_traffic("in", "game_message", size, redact_packet_text(parsed->text));
             log_console("[Bot] GameMessage: " + parsed->text);
             handle_game_message(parsed->text, id);
             break;
 
         case IncomingPacket::Type::GameUpdate: {
             const GameUpdatePacket& pkt = parsed->game_update;
-            emit_traffic("in", "game_update:" + gpt_name(pkt.packet_type), size,
-                         format_game_packet_detail(pkt));
+            if (wants_traffic())
+                emit_traffic("in", "game_update:" + gpt_name(pkt.packet_type), size,
+                             format_game_packet_detail(pkt));
             update_geiger_signal(pkt);
 
             switch (pkt.packet_type) {
@@ -257,7 +263,7 @@ void Bot::on_receive(adonai::net::PeerId id, std::uint8_t channel,
 
                 case kPT(GamePacketType::SendInventoryState):
                     try {
-                        adonai::world::Inventory inv = adonai::world::Inventory::parse(pkt.extra_data);
+                        nxrth::world::Inventory inv = nxrth::world::Inventory::parse(pkt.extra_data);
                         log_console("[Bot] Inventory: " + std::to_string(inv.items.size()) +
                                     " items");
                         equipped_items_.clear();
@@ -301,27 +307,35 @@ void Bot::on_receive(adonai::net::PeerId id, std::uint8_t channel,
                     break;
 
                 default:
-                    log_console("[Bot] " + format_game_packet_detail(pkt));
+                    // These packets are extremely frequent visual noise. Keep
+                    // particle packets and every other unknown packet available
+                    // for Geiger/debug work, but do not flood the UI rings.
+                    if (pkt.packet_type != kPT(GamePacketType::SetIconState) &&
+                        pkt.packet_type != kPT(GamePacketType::Npc))
+                        log_console("[Bot] " + format_game_packet_detail(pkt));
                     break;
             }
             break;
         }
 
         case IncomingPacket::Type::Track:
-            emit_traffic("in", "track", size, redact_packet_text(parsed->text));
+            if (wants_traffic())
+                emit_traffic("in", "track", size, redact_packet_text(parsed->text));
             log_console("[Bot] Track: " + parsed->text);
             handle_track(parsed->text);
             break;
 
         case IncomingPacket::Type::ClientLogRequest:
-            emit_traffic("in", "client_log_request", size, "ClientLogRequest");
+            if (wants_traffic())
+                emit_traffic("in", "client_log_request", size, "ClientLogRequest");
             log_console("[Bot] ClientLogRequest");
             break;
 
         case IncomingPacket::Type::Unknown:
-            emit_traffic("in", "unknown:" + std::to_string(parsed->msg_type), size,
-                         "unknown msg_type=" + std::to_string(parsed->msg_type) +
-                             " payload_len=" + std::to_string(parsed->data.size()));
+            if (wants_traffic())
+                emit_traffic("in", "unknown:" + std::to_string(parsed->msg_type), size,
+                             "unknown msg_type=" + std::to_string(parsed->msg_type) +
+                                 " payload_len=" + std::to_string(parsed->data.size()));
             log_console("[Bot] Unknown msg_type=" + std::to_string(parsed->msg_type) +
                         " len=" + std::to_string(parsed->data.size()));
             break;
@@ -329,7 +343,7 @@ void Bot::on_receive(adonai::net::PeerId id, std::uint8_t channel,
 }
 
 // --- GameMessage substring scans + logon_fail ladder -----------------------
-void Bot::handle_game_message(const std::string& s, adonai::net::PeerId id) {
+void Bot::handle_game_message(const std::string& s, nxrth::net::PeerId id) {
     const auto now = Clock::now();
     auto has = [&](const char* needle) { return s.find(needle) != std::string::npos; };
 
@@ -394,13 +408,21 @@ void Bot::handle_game_message(const std::string& s, adonai::net::PeerId id) {
             std::uint32_t streak = login_throttle_streak_;  // capture before any reset
             bool rotate = login_proxy_.has_value();
             if (rotate) {
-                refresh_token_on_reconnect_ = true;
-                login_throttle_streak_ = 0;
-                log_console("[Bot] Logon failed — 'Fail to login, try again in 30s' (" +
-                            std::to_string(streak) +
-                            "x): restarting login from scratch on a FRESH exit IP + token, fleet "
-                            "retry in ~" +
-                            std::to_string(secs) + " s.");
+                const bool provider_ready =
+                    login_method_.kind == nxrth::login::LoginMethodKind::ProviderLtoken;
+                if (provider_ready && streak >= 2) {
+                    log_console("[Bot] Provider token received the same fail-to-login response "
+                                "twice - stopping this account.");
+                    stop_requested_ = true;
+                } else {
+                    refresh_token_on_reconnect_ = true;
+                    if (!provider_ready) login_throttle_streak_ = 0;
+                    log_console(
+                        "[Bot] Logon failed — 'Fail to login, try again in 30s' (" +
+                        std::to_string(streak) + "x): restarting on a FRESH exit IP " +
+                        (provider_ready ? "with the same provider token" : "+ token") +
+                        ", fleet retry in ~" + std::to_string(secs) + " s.");
+                }
             } else {
                 log_console("[Bot] Logon failed — 'Fail to login, try again in 30s' (" +
                             std::to_string(streak) +
@@ -500,7 +522,7 @@ void Bot::on_ping_request(std::uint32_t challenge) {
 
     GameUpdatePacket reply{};
     reply.packet_type = kPT(GamePacketType::PingReply);
-    reply.target_net_id = adonai::protocol::hash_string(std::to_string(challenge));
+    reply.target_net_id = nxrth::protocol::hash_string(std::to_string(challenge));
     reply.value = time_val;
     reply.vector_x = bx * 32.0f;
     reply.vector_y = by * 32.0f;
@@ -515,7 +537,7 @@ void Bot::on_ping_request(std::uint32_t challenge) {
 // ===========================================================================
 // §2.9 on_call_function — CallFunction dispatch
 // ===========================================================================
-void Bot::on_call_function(adonai::net::PeerId id, const std::vector<std::uint8_t>& extra_data) {
+void Bot::on_call_function(nxrth::net::PeerId id, const std::vector<std::uint8_t>& extra_data) {
     auto vl_opt = VariantList::deserialize(extra_data);
     if (!vl_opt) {
         log_console("[Bot] VariantList parse error");
@@ -523,7 +545,8 @@ void Bot::on_call_function(adonai::net::PeerId id, const std::vector<std::uint8_
     }
     const VariantList& vl = *vl_opt;
     std::string fn_name = arg_str(vl, 0);
-    log_console("[Bot] CallFunction: " + fn_name);
+    if (fn_name != "OnClearItemTransforms")
+        log_console("[Bot] CallFunction: " + fn_name);
 
     auto rebuild_players_state = [&]() {
         std::vector<PlayerInfo> pv;
@@ -697,7 +720,7 @@ void Bot::on_call_function(adonai::net::PeerId id, const std::vector<std::uint8_
 
     if (fn_name == "OnSetPos") {
         const Variant* v = vl.get(1);
-        adonai::protocol::Vec2 xy = v ? v->as_vec2() : adonai::protocol::Vec2{};
+        nxrth::protocol::Vec2 xy = v ? v->as_vec2() : nxrth::protocol::Vec2{};
         pos_x_ = xy.x;
         pos_y_ = xy.y;
         if (pathfind_target_.has_value()) pathfind_recalc_ = true;
@@ -803,13 +826,114 @@ void Bot::clear_login_state_flags() {
 // ===========================================================================
 // §2.6 build_login_packet — first (gateway) logon body
 // ===========================================================================
-std::string Bot::build_login_packet() const {
-    const std::string P = std::to_string(adonai::constants::PROTOCOL);
-    const std::string F = std::to_string(adonai::constants::FHASH);
+std::string build_ltoken_gateway_packet(std::string_view token) {
+    return "protocol|" + std::to_string(nxrth::constants::PROTOCOL) + "\nltoken|" +
+           std::string(token) + "\nplatformID|2\n";
+}
 
-    if (login_method_.kind == adonai::login::LoginMethodKind::Newly) {
-        // Form 1 — minimal.
-        return "protocol|" + P + "\nltoken|" + ltoken_ + "\nplatformID|" + platform_id_ + "\n";
+// The full client identity body (field set/order matches the working reference
+// client's captured packet). Used by both the first-gateway packet (with `ltoken|`)
+// and the redirect packet (with user/token/UUIDToken). `tail` supplies the auth
+// line(s) that differ between the two.
+static std::string provider_identity_body(const nxrth::login::LoginIdentity& id,
+                                          std::string_view protocol, std::string_view meta) {
+    const std::string F = std::to_string(nxrth::constants::FHASH);
+    std::string s;
+    s += "tankIDName|\ntankIDPass|\nrequestedName|\nf|1\n";
+    s += "protocol|" + std::string(protocol) + "\n";
+    s += "game_version|" + id.game_version + "\n";
+    s += "cbits|" + id.cbits + "\n";
+    s += "player_age|" + id.player_age + "\n";
+    s += "GDPR|" + id.gdpr + "\n";
+    s += "FCMToken|\n";
+    s += "category|" + id.category + "\n";
+    s += "totalPlaytime|" + id.total_playtime + "\n";
+    s += "klv|" + id.klv + "\n";
+    s += "hash2|" + id.hash2 + "\n";
+    s += "vid|" + id.vid + "\n";
+    s += "aid|\n";
+    s += "meta|" + std::string(meta) + "\n";
+    s += "fhash|" + F + "\n";
+    s += "rid|" + id.rid + "\n";
+    s += "platformID|" + id.platform_id + "\n";
+    s += "deviceVersion|0\n";
+    s += "country|" + id.country + "\n";
+    s += "hash|" + id.hash + "\n";
+    s += "mac|" + id.mac + "\n";
+    s += "wk|" + id.wk + "\n";
+    return s;
+}
+
+std::string build_provider_gateway_packet(const nxrth::login::LoginIdentity& id,
+                                          std::string_view protocol, std::string_view meta,
+                                          std::string_view ltoken) {
+    std::string s = provider_identity_body(id, protocol, meta);
+    s += "lmode|1\n";
+    s += "ltoken|" + std::string(ltoken) + "\n";
+    return s;
+}
+
+std::string build_provider_redirect_packet(const nxrth::login::LoginIdentity& id,
+                                           std::string_view protocol, std::string_view meta,
+                                           const RedirectData& r) {
+    std::string s = provider_identity_body(id, protocol, meta);
+    s += "lmode|" + r.lmode + "\n";
+    s += "user|" + r.user + "\n";
+    s += "token|" + r.token + "\n";
+    s += "UUIDToken|" + r.uuid + "\n";
+    if (!r.door_id.empty()) s += "doorID|" + r.door_id + "\n";
+    s += "aat|2\n";
+    return s;
+}
+
+nxrth::login::LoginIdentity Bot::login_identity_view() const {
+    nxrth::login::LoginIdentity id;
+    id.game_version = game_version_;
+    id.cbits = cbits_;
+    id.player_age = player_age_;
+    id.gdpr = gdpr_;
+    id.category = category_;
+    id.total_playtime = total_playtime_;
+    id.country = country_;
+    id.rid = rid_;
+    id.mac = mac_;
+    id.wk = wk_;
+    id.hash = hash_;
+    id.hash2 = hash2_;
+    id.fz = fz_;
+    id.zf = zf_;
+    id.klv = klv_;
+    id.platform_id = platform_id_;
+    id.steam_token = steam_token_;
+    id.vid = vid_;
+    return id;
+}
+
+std::string Bot::build_provider_login_packet() const {
+    // The gateway accepts the bare core.rs packet (protocol|226 / ltoken / platformID|2)
+    // carrying the checktoken-issued SESSION ltoken; it then replies OnSendToServer.
+    // The full client-identity body belongs to the subserver/redirect packet, NOT the
+    // first gateway packet. NXRTH_PLTOKEN_FORM=full forces the full body for testing.
+    if (const char* f = std::getenv("NXRTH_PLTOKEN_FORM")) {
+        if (std::string(f) == "full")
+            return build_provider_gateway_packet(login_identity_view(), provider_login_protocol(),
+                                                 meta_, ltoken_);
+    }
+    return build_ltoken_gateway_packet(ltoken_);
+}
+
+std::string Bot::build_login_packet() const {
+    const std::string P = std::to_string(nxrth::constants::PROTOCOL);
+    const std::string F = std::to_string(nxrth::constants::FHASH);
+
+    if (login_method_.kind == nxrth::login::LoginMethodKind::ProviderLtoken) {
+        // Provider token is a /growid/login/validate output used directly, but the
+        // gateway needs the record's STATIC device inline (a bare ltoken is rejected).
+        return build_provider_login_packet();
+    }
+    if (login_method_.kind == nxrth::login::LoginMethodKind::Ltoken) {
+        // Google refresh input becomes a checktoken output; sent as a bare ltoken.
+        return build_ltoken_gateway_packet(ltoken_);
     }
 
     if (std::string(login_token_field(ltoken_)) == "UbiTicket") {
@@ -840,11 +964,32 @@ std::string Bot::build_login_packet() const {
     return s;
 }
 
+std::string Bot::build_login_data() const {
+    const std::string P = std::to_string(nxrth::constants::PROTOCOL);
+    const std::string F = std::to_string(nxrth::constants::FHASH);
+    return "tankIDName|\ntankIDPass|\nrequestedName|\nf|1\nprotocol|" + P +
+           "\ngame_version|" + game_version_ + "\nfz|" + fz_ + "\ncbits|" + cbits_ +
+           "\nplayer_age|" + player_age_ + "\nGDPR|" + gdpr_ +
+           "\nFCMToken|\ncategory|" + category_ + "\ntotalPlaytime|" + total_playtime_ + "\nklv|" +
+           klv_ + "\nhash2|" + hash2_ + "\nmeta|" + meta_ + "\nfhash|" + F + "\nrid|" +
+           rid_ + "\nplatformID|" + platform_id_ + "\ndeviceVersion|0\ncountry|" + country_ +
+           "\nhash|" + hash_ + "\nmac|" + mac_ + "\nwk|" + wk_ + "\nzf|" + zf_ +
+           "\nlmode|1\n";
+}
+
 // ===========================================================================
 // §2.10 build_redirect_packet — subserver logon body (protocol|211)
 // ===========================================================================
 std::string Bot::build_redirect_packet(const RedirectData& r) const {
-    const std::string F = std::to_string(adonai::constants::FHASH);
+    // Provider ltoken sessions use the same full identity body as the first gateway
+    // packet (protocol|225, platformID|1, vid/aid), carrying the redirect auth fields.
+    if (login_method_.kind == nxrth::login::LoginMethodKind::ProviderLtoken) {
+        return build_provider_redirect_packet(login_identity_view(), provider_login_protocol(),
+                                              meta_, r);
+    }
+    const std::string F = std::to_string(nxrth::constants::FHASH);
+    const bool oauth = login_method_.kind == nxrth::login::LoginMethodKind::Ltoken ||
+                       login_method_.kind == nxrth::login::LoginMethodKind::ProviderLtoken;
     std::string s;
     s += "tankIDName|" + r.tank_id_name + "\n";
     s += "tankIDPass|\n";
@@ -852,10 +997,10 @@ std::string Bot::build_redirect_packet(const RedirectData& r) const {
     s += "f|1\n";
     s += "protocol|211\n";  // literal 211, NOT PROTOCOL
     s += "game_version|" + game_version_ + "\n";
-    s += "fz|" + fz_ + "\n";
-    s += "cbits|" + cbits_ + "\n";
-    s += "player_age|" + player_age_ + "\n";
-    s += "GDPR|" + gdpr_ + "\n";
+    s += "fz|" + (oauth ? std::string("47142936") : fz_) + "\n";
+    s += "cbits|" + (oauth ? std::string("1536") : cbits_) + "\n";
+    s += "player_age|" + (oauth ? std::string("18") : player_age_) + "\n";
+    s += "GDPR|" + (oauth ? std::string("1") : gdpr_) + "\n";
     s += "FCMToken|\n";
     s += "category|" + category_ + "\n";
     s += "totalPlaytime|" + total_playtime_ + "\n";
@@ -864,13 +1009,13 @@ std::string Bot::build_redirect_packet(const RedirectData& r) const {
     s += "meta|" + meta_ + "\n";
     s += "fhash|" + F + "\n";
     s += "rid|" + rid_ + "\n";
-    s += "platformID|" + platform_id_ + "\n";
+    s += "platformID|" + (oauth ? std::string("0,1,1") : platform_id_) + "\n";
     s += "deviceVersion|0\n";
-    s += "country|" + country_ + "\n";
+    s += "country|" + (oauth ? std::string("ma") : country_) + "\n";
     s += "hash|" + hash_ + "\n";
     s += "mac|" + mac_ + "\n";
     s += "wk|" + wk_ + "\n";
-    s += "zf|" + zf_ + "\n";
+    s += "zf|" + (oauth ? std::string("-821693372") : zf_) + "\n";
     s += "lmode|" + r.lmode + "\n";
     s += "user|" + r.user + "\n";
     s += "token|" + r.token + "\n";
@@ -885,24 +1030,26 @@ std::string Bot::build_redirect_packet(const RedirectData& r) const {
 // ===========================================================================
 void Bot::send_text(const std::string& text) {
     if (!peer_id_.has_value()) return;
-    auto raw = adonai::protocol::make_text_packet(text);
-    emit_traffic("out", "text", raw.size(), redact_packet_text(text));
+    auto raw = nxrth::protocol::make_text_packet(text);
+    if (wants_traffic()) emit_traffic("out", "text", raw.size(), redact_packet_text(text));
     host_.peer_send(*peer_id_, 0, raw.data(), raw.size(), true);
 }
 
 void Bot::send_game_message(const std::string& text) {
     if (!peer_id_.has_value()) return;
-    auto raw = adonai::protocol::make_game_message_packet(text);
-    emit_traffic("out", "game_message", raw.size(), redact_packet_text(text));
+    auto raw = nxrth::protocol::make_game_message_packet(text);
+    if (wants_traffic())
+        emit_traffic("out", "game_message", raw.size(), redact_packet_text(text));
     host_.peer_send(*peer_id_, 0, raw.data(), raw.size(), true);
 }
 
-void Bot::send_game_packet(const adonai::protocol::GameUpdatePacket& pkt, bool reliable) {
+void Bot::send_game_packet(const nxrth::protocol::GameUpdatePacket& pkt, bool reliable) {
     if (!peer_id_.has_value()) return;
-    auto raw = adonai::protocol::make_game_packet(pkt);
-    emit_traffic("out", "game_update:" + gpt_name(pkt.packet_type), raw.size(),
-                 format_game_packet_detail(pkt));
+    auto raw = nxrth::protocol::make_game_packet(pkt);
+    if (wants_traffic())
+        emit_traffic("out", "game_update:" + gpt_name(pkt.packet_type), raw.size(),
+                     format_game_packet_detail(pkt));
     host_.peer_send(*peer_id_, 0, raw.data(), raw.size(), reliable);
 }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

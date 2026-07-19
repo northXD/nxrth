@@ -1,13 +1,13 @@
-// Adonai — Growtopia client constants (ported from Mori/constants.rs).
+// Nxrth — Growtopia client constants (ported from Mori/constants.rs).
 // GT is little-endian throughout. Version is FORCE-enforced by the game.
 #pragma once
 #include <cstdint>
 #include <string_view>
 
-namespace adonai::constants {
+namespace nxrth::constants {
 
 // App identity (native ImGui client).
-inline constexpr std::string_view APP_NAME = "Adonai";
+inline constexpr std::string_view APP_NAME = "Nxrth";
 inline constexpr std::string_view APP_VERSION = "0.1.0";
 // Upstream lineage credited to "North" (was "Cloei" upstream in the Rust build).
 inline constexpr std::string_view UPSTREAM = "North";
@@ -26,7 +26,8 @@ inline constexpr std::string_view DEFAULT_WK = "788E366E74D2D098398A35C3F6360DDA
 inline constexpr std::string_view DEFAULT_HASH = "381621508";
 inline constexpr std::string_view DEFAULT_HASH2 = "-332772458";
 inline constexpr std::string_view DEFAULT_FZ = "18274296";
-// The login platformID that actually matters for Adonai's flow (mobile 15,1,0).
+// Default platform for the legacy credential flow. Google OAuth ltoken gateway
+// login uses the literal platformID 2, matching the current Rust implementation.
 inline constexpr std::string_view DEFAULT_PLATFORM_ID = "15,1,0";
 inline constexpr std::string_view DEFAULT_ZF = "1597752569";
 // NOTE: fz/hash2/zf/steamToken are used in the ENet protocol|211 login packet but
@@ -39,4 +40,4 @@ inline constexpr std::string_view SERVER_DATA_HOST_1 = "www.growtopia1.com";
 inline constexpr std::string_view SERVER_DATA_HOST_2 = "www.growtopia2.com";
 inline constexpr std::string_view SERVER_DATA_PATH = "/growtopia/server_data.php";
 
-} // namespace adonai::constants
+} // namespace nxrth::constants

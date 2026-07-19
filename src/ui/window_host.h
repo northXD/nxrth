@@ -1,8 +1,8 @@
-// Adonai — abstraction the custom title bar uses to drive the OS window
+// Nxrth — abstraction the custom title bar uses to drive the OS window
 // (implemented over GLFW in main.cpp). Keeps the UI decoupled from the backend.
 #pragma once
 
-namespace adonai::ui {
+namespace nxrth::ui {
 
 class IWindowHost {
 public:
@@ -24,4 +24,4 @@ public:
     virtual void drag_by(float dx, float dy) = 0;
 };
 
-}  // namespace adonai::ui
+}  // namespace nxrth::ui

@@ -4,7 +4,7 @@
 
 #include "core/cursor.h"
 
-namespace adonai::protocol {
+namespace nxrth::protocol {
 
 namespace {
 
@@ -177,4 +177,4 @@ std::optional<IncomingPacket> IncomingPacket::parse(std::span<const std::uint8_t
     }
 }
 
-}  // namespace adonai::protocol
+}  // namespace nxrth::protocol

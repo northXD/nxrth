@@ -1,7 +1,7 @@
 # Port Spec 03 — `net-socks5` (SOCKS5 UDP relay + `server_data.php` fetch)
 
 **Source Rust module(s):** `socks5.rs`, `server_data.rs` (Mori 2.0.0, `src/`)
-**Target:** Adonai (C++). This document is the single source of truth. An engineer must be able to
+**Target:** Nxrth (C++). This document is the single source of truth. An engineer must be able to
 reimplement this module in C++ **without** reading the Rust.
 
 This module has two independent concerns:
@@ -9,7 +9,7 @@ This module has two independent concerns:
 1. **`socks5.rs`** — a SOCKS5 client that performs a **UDP ASSOCIATE** and wraps a `UdpSocket` so that
    every datagram sent gets a SOCKS5 UDP request header prepended, and every datagram received gets it
    stripped. In Mori this wrapper implements the `rusty_enet::Socket` trait so ENet talks UDP through the
-   proxy. **In Adonai this becomes a patch to the vendored C ENet socket layer** (there is no `rusty_enet`).
+   proxy. **In Nxrth this becomes a patch to the vendored C ENet socket layer** (there is no `rusty_enet`).
 2. **`server_data.rs`** — an HTTPS `POST` to `server_data.php` (growtopia1 primary / growtopia2 alternate)
    that returns a pipe-delimited key/value blob describing the game server to connect to. Optionally routed
    through an HTTP/SOCKS proxy.
@@ -65,7 +65,7 @@ Error type for the handshake. Variants (no payload except `Io`):
 **C++ mapping:** an `enum class Socks5Error { Io, InvalidResponse, ... }` plus a `to_string()`/`what()`
 helper reproducing the messages. There is no `io::Error`/`ErrorKind` in C++; represent failures with a
 small `struct { Socks5Error code; std::string msg; int os_errno; }` or throw a `std::runtime_error(msg)`.
-The `ErrorKind` values only matter where Adonai's caller distinguishes them; if it doesn't, keep the
+The `ErrorKind` values only matter where Nxrth's caller distinguishes them; if it doesn't, keep the
 message strings and drop the kind mapping.
 
 ### 1.2 `Socks5UdpSocket` (struct) — `socks5.rs`
@@ -418,7 +418,7 @@ In C++: return `std::optional<ServerData>` / throw, or an `expected<ServerData, 
    > **Fallback note:** this function does NOT loop growtopia1→growtopia2 itself. The `alternate` bool
    > only *selects* one endpoint. The growtopia1-primary/growtopia2-fallback policy is the **caller's**
    > responsibility (call with `alternate=false`, and on `Err` retry with `alternate=true`). Port the
-   > caller's retry policy in whatever Adonai module drives login; this module just needs both URLs.
+   > caller's retry policy in whatever Nxrth module drives login; this module just needs both URLs.
 2. `println!("[server_data] proxy_url={:?}", proxy_url.map(redact_proxy_url))` — log the **redacted**
    proxy (credentials masked). Keep this log; keep the redaction.
 3. **Build HTTP agent:**
@@ -464,9 +464,9 @@ value doesn't parse as a URL, return it unchanged. C++: reuse the URL parser (§
 
 ---
 
-## 3. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 3. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
-| Rust (this module) | Used for | Adonai C++ replacement |
+| Rust (this module) | Used for | Nxrth C++ replacement |
 |---|---|---|
 | `rusty_enet::{Socket, SocketOptions, PacketReceived, MTU_MAX}` | ENet socket-layer trait | **Vendored C ENet, patched** at `enet_socket_send`/`enet_socket_receive` (or a socket shim). No trait — patch the C functions. `MTU_MAX` → `ENET_PROTOCOL_MAXIMUM_MTU` (4096). `PacketReceived::Complete(n)` → return `n`; `None` → return 0. |
 | `std::net::{TcpStream, UdpSocket, SocketAddr, Ipv4Addr, Ipv6Addr}` | SOCKS5 control TCP + relay UDP | Native BSD/Winsock sockets. **Not libcurl** — this is raw UDP relay, curl can't do UDP-ASSOCIATE. TCP `connect` w/ 10s timeout; `SO_RCVTIMEO/SO_SNDTIMEO`=15s; UDP `bind`+non-blocking. `SocketAddr` → `sockaddr_storage`. |
@@ -474,7 +474,7 @@ value doesn't parse as a URL, return it unchanged. C++: reuse the URL parser (§
 | `ureq` + `ureq::tls::TlsConfig` | HTTPS POST to server_data.php | **libcurl.** Set `CURLOPT_USERAGENT`, `CURLOPT_HTTPHEADER` (Content-Type), `CURLOPT_POSTFIELDS`, `CURLOPT_TIMEOUT` 20s. **Disable TLS verify:** `CURLOPT_SSL_VERIFYPEER=0`, `CURLOPT_SSL_VERIFYHOST=0` (mirrors `disable_verification(true)`). |
 | `ureq::Proxy` | route fetch through proxy | `CURLOPT_PROXY`. Use **`socks5h://`** (remote DNS) for SOCKS proxies per the memory note about IP-binding; `http://` for HTTP proxies. Enable cookies (`CURLOPT_COOKIEFILE ""`) if the login flow needs them. |
 | `url::Url` (in `redact_proxy_url`) | mask proxy creds in logs | Small manual parser or a vendored URL lib. Only needs `user`/`pass` masking. |
-| `crate::logger::log` | file/console logging | Adonai logger (renamed; see §7). Keep the `[server_data]` tag. |
+| `crate::logger::log` | file/console logging | Nxrth logger (renamed; see §7). Keep the `[server_data]` tag. |
 | `std::error::Error` boxed | error propagation | `std::string` error / `expected` / exceptions. |
 | `md5`, `argon2`, `serde_json`, `mlua`, `scraper`, `crossbeam-channel`, `tokio/axum/tower` | — | **Not used in this module.** (Fleet-wide: json→nlohmann, hashing→bundled md5/argon2 lib, channels→std::mutex+condvar queue, async runtime/web→std::thread + Dear ImGui. None apply here.) |
 
@@ -486,7 +486,7 @@ value doesn't parse as a URL, return it unchanged. C++: reuse the URL parser (§
   and `relay_addr`. It is created (handshake included) synchronously **inside that bot's service loop** on
   connect / reconnect / server-redirect. The 10s/15s timeouts (§2.1) exist specifically because this runs
   on the worker thread: a blocking handshake would freeze the bot and make it ignore its stop flag. In
-  Adonai, the ENet host lives on the bot's worker thread (`std::thread`); the patched socket send/receive
+  Nxrth, the ENet host lives on the bot's worker thread (`std::thread`); the patched socket send/receive
   run on that same thread inside the ENet service tick. No locking is needed on the socket itself — it is
   single-owner. **Do not share one `Socks5UdpSocket`/UDP fd across bots.**
 - **Control TCP lifetime = association lifetime.** The `_control_stream` must stay open for as long as the
@@ -495,7 +495,7 @@ value doesn't parse as a URL, return it unchanged. C++: reuse the URL parser (§
 - **`server_data` fetch is a blocking HTTPS call (up to 20s).** It should run off the hot path — either on
   the bot's setup thread before ENet starts, or on a dedicated fetch thread. It shares no mutable state
   with the socket layer.
-- **Fleet-wide shared-state notes (Adonai "bots aware of each other"):**
+- **Fleet-wide shared-state notes (Nxrth "bots aware of each other"):**
   - **Proxy assignment must be stable per bot.** Per the memory note (GT ltoken is bound to the minting
     IP), a bot must use a **consistent** proxy across the server_data fetch *and* the SOCKS5 UDP relay *and*
     login — a rotating-per-stage proxy breaks GT login. The fleet's shared proxy-pool manager must pin one
@@ -558,21 +558,21 @@ little-endian, but that's *inside* the ENet payload, opaque to this module.)
 
 ---
 
-## 7. RENAME RULES (Mori → Adonai, Cloei → North)
+## 7. RENAME RULES (Mori → Nxrth, Cloei → North)
 
 Global rules for the port:
 
-- Every `Mori`/`mori` identifier, file path, log line, window title, User-Agent (Adonai's *own* UA, if
-  any), config filename → `Adonai`/`adonai`.
+- Every `Mori`/`mori` identifier, file path, log line, window title, User-Agent (Nxrth's *own* UA, if
+  any), config filename → `Nxrth`/`nxrth`.
 - Every `Cloei`/`cloei` (upstream author/repo) → `North`/`north`.
 
 **Concrete occurrences in *these two files*:**
 
 - **None literal.** Neither `socks5.rs` nor `server_data.rs` contains the strings `Mori`/`mori` or
   `Cloei`/`cloei`. The only branding-adjacent references are the Rust module path `crate::logger` → map to
-  Adonai's logger namespace (e.g. `adonai::logger` / `north::logger` per project layout), and the source
-  file names themselves (`socks5.rs`, `server_data.rs`) → Adonai C++ units (e.g. `socks5.{h,cpp}`,
-  `server_data.{h,cpp}` under the Adonai `net` module).
+  Nxrth's logger namespace (e.g. `nxrth::logger` / `north::logger` per project layout), and the source
+  file names themselves (`socks5.rs`, `server_data.rs`) → Nxrth C++ units (e.g. `socks5.{h,cpp}`,
+  `server_data.{h,cpp}` under the Nxrth `net` module).
 
 **MUST-NOT-RENAME (these are Growtopia/Ubisoft wire constants, not Mori/Cloei branding):**
 
@@ -583,8 +583,8 @@ Global rules for the port:
   (`server`, `port`, `loginurl`, `type`, `beta*`, `type2`, `#maint`, `meta`).
 - All SOCKS5 protocol bytes/versions.
 
-Adonai's log tags may keep `[server_data]` (descriptive, not branded) — but if the project prefixes logs
-with the app name elsewhere, use `adonai`/`north` there, never `mori`/`cloei`.
+Nxrth's log tags may keep `[server_data]` (descriptive, not branded) — but if the project prefixes logs
+with the app name elsewhere, use `nxrth`/`north` there, never `mori`/`cloei`.
 
 ---
 

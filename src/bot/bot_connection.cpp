@@ -1,4 +1,4 @@
-// Adonai — Bot connection/login half (port spec 06 "Bot Core & State").
+// Nxrth — Bot connection/login half (port spec 06 "Bot Core & State").
 //
 // This translation unit owns the CONNECTION + LOGIN machinery of the Bot class:
 //   * the five spawn factories + the private full constructor (§2.4)
@@ -30,24 +30,24 @@
 #include "net/server_data.h"
 #include "protocol/crypto.h"
 
-namespace consts = adonai::constants;
+namespace consts = nxrth::constants;
 
-// Adonai uses only newly / legacy / ltoken login. The HAR (Requestly / .har)
-// paths were dropped, so there are no requestly/har cross-module contracts here.
+// Nxrth uses legacy GrowID and Google OAuth ltoken login. Retired dashboard
+// variants and HAR paths are intentionally absent.
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 using Clock = std::chrono::steady_clock;
-using adonai::login::Credentials;
-using adonai::login::LoginIdentity;
-using adonai::login::LoginMethod;
-using adonai::login::LoginMethodKind;
-using adonai::login::LogFn;
-using adonai::net::ServerData;
-using adonai::net::kHostChannelLimit;
-using adonai::net::kPeerTimeoutLimit;
-using adonai::net::kPeerTimeoutMaxMs;
-using adonai::net::kPeerTimeoutMinMs;
+using nxrth::login::Credentials;
+using nxrth::login::LoginIdentity;
+using nxrth::login::LoginMethod;
+using nxrth::login::LoginMethodKind;
+using nxrth::login::LogFn;
+using nxrth::net::ServerData;
+using nxrth::net::kHostChannelLimit;
+using nxrth::net::kPeerTimeoutLimit;
+using nxrth::net::kPeerTimeoutMaxMs;
+using nxrth::net::kPeerTimeoutMinMs;
 
 namespace {
 
@@ -64,13 +64,62 @@ std::string to_lower_copy(std::string s) {
     return s;
 }
 
-// §1.8 Socks5Config::to_url — "socks5://user:pass@host:port" (both creds) else
-// "socks5://host:port". Used only for the reconnect candidate labels/URLs.
+// HTTP side of the login uses remote proxy DNS (`socks5h`) and the same proxy
+// endpoint as ENet, keeping the OAuth-derived token on one egress IP.
 std::string socks5_to_url(const Socks5Config& c) {
-    std::string u = "socks5://";
+    std::string u = "socks5h://";
     if (c.username && c.password) u += *c.username + ":" + *c.password + "@";
     u += c.host + ":" + std::to_string(c.port);
     return u;
+}
+
+struct LtokenServerData {
+    ServerData data;
+    std::optional<Socks5Config> provider_enet;
+    std::optional<std::string> http_proxy_url;
+};
+
+std::optional<LtokenServerData> fetch_ltoken_server_data(
+    const std::optional<Socks5Config>& proxy,
+    const std::optional<nxrth::proxy::RotatingLoginProxy>& login_proxy,
+    bool google_refresh_token, std::atomic<bool>& stop, const LogFn& log) {
+    nxrth::net::LoginInfo login_info;
+    login_info.protocol = consts::PROTOCOL;
+    login_info.game_version = std::string(consts::GAME_VER);
+
+    bool alternate = false;
+    while (!stop.load()) {
+        std::optional<std::string> proxy_url;
+        std::optional<Socks5Config> provider_enet;
+        if (!google_refresh_token && login_proxy) {
+            if (auto session = login_proxy->login_session()) {
+                proxy_url = session->http_url;
+                provider_enet = std::move(session->enet);
+            }
+        } else if (proxy) {
+            proxy_url = socks5_to_url(*proxy);
+        }
+        if (!proxy_url && !std::getenv("NXRTH_ALLOW_DIRECT_LOGIN")) {
+            log("[Bot] no proxy assigned - refusing DIRECT ltoken login to protect the real "
+                "IP (set NXRTH_ALLOW_DIRECT_LOGIN=1 to override). Stopping bot.");
+            stop.store(true);
+            return std::nullopt;
+        }
+
+        log("[Bot] fetching server_data for " +
+            std::string(google_refresh_token ? "Google OAuth" : "provider ltoken") +
+            " (alternate=" +
+            std::string(alternate ? "true" : "false") + ")...");
+        auto result = nxrth::net::get_server_data_proxied(alternate, login_info, proxy_url);
+        if (result.ok())
+            return LtokenServerData{std::move(*result.data), std::move(provider_enet),
+                                    std::move(proxy_url)};
+        log("[Bot] ltoken server_data failed: " + result.error + " - retrying in 5s");
+        alternate = !alternate;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+    log("[Bot] ltoken login aborted - bot was stopped");
+    return std::nullopt;
 }
 
 // Toggle the http/https scheme of a login-proxy URL (the "alt scheme" fallback
@@ -98,11 +147,11 @@ std::string ep_str(const SockEndpoint& e) {
 LogFn make_login_log_fn(std::shared_ptr<SharedBotState> state, std::uint32_t bot_id,
                         EventSinkPtr sink) {
     return [state, bot_id, sink](const std::string& message) {
-        adonai::log(message, static_cast<int>(bot_id));
+        nxrth::log(message, static_cast<int>(bot_id));
         if (state) {
             state->write([&](BotState& s) {
                 s.console.push_back(message);
-                while (s.console.size() > CONSOLE_RING_CAP) s.console.erase(s.console.begin());
+                while (s.console.size() > CONSOLE_RING_CAP) s.console.pop_front();
             });
         }
         if (sink) sink->console(bot_id, message);
@@ -123,9 +172,9 @@ void stagger_http_login(const LogFn& log) {
 // member) reconnect_main's simple path. Loops until success or stop.
 std::optional<ServerData> fetch_server_data_free(
     const std::optional<Socks5Config>& proxy,
-    const std::optional<adonai::proxy::RotatingLoginProxy>& login_proxy, std::atomic<bool>& stop,
+    const std::optional<nxrth::proxy::RotatingLoginProxy>& login_proxy, std::atomic<bool>& stop,
     const LogFn& log) {
-    adonai::net::LoginInfo login_info;
+    nxrth::net::LoginInfo login_info;
     login_info.protocol = consts::PROTOCOL;
     login_info.game_version = std::string(consts::GAME_VER);
     std::optional<Socks5Config> current = proxy;  // swapped on a 403
@@ -140,17 +189,17 @@ std::optional<ServerData> fetch_server_data_free(
             proxy_url = login_proxy->fresh_url();
         else if (current)
             proxy_url = socks5_to_url(*current);
-        else if (!std::getenv("ADONAI_ALLOW_DIRECT_LOGIN")) {
+        else if (!std::getenv("NXRTH_ALLOW_DIRECT_LOGIN")) {
             // No proxy -> a direct server_data fetch leaks the real IP (24h ban).
             log("[Bot] no proxy assigned - refusing DIRECT server_data fetch to protect the "
-                "real IP (set ADONAI_ALLOW_DIRECT_LOGIN=1 to override). Stopping bot.");
+                "real IP (set NXRTH_ALLOW_DIRECT_LOGIN=1 to override). Stopping bot.");
             stop.store(true);
             return std::nullopt;
         }
 
         log("[Bot] fetching server_data (alternate=" + std::string(alternate ? "true" : "false") +
             ")...");
-        auto res = adonai::net::get_server_data_proxied(alternate, login_info, proxy_url);
+        auto res = nxrth::net::get_server_data_proxied(alternate, login_info, proxy_url);
         if (res.ok()) return res.data;
 
         // A 403 means THIS game-proxy exit IP is blocked. Quarantine it fleet-wide
@@ -163,10 +212,10 @@ std::optional<ServerData> fetch_server_data_free(
             err_low.find("403") != std::string::npos || err_low.find("forbidden") != std::string::npos;
         if (is_403 && !login_proxy && current) {
             const std::string key = current->host + ":" + std::to_string(current->port);
-            adonai::proxy::quarantine_proxy(key);
+            nxrth::proxy::quarantine_proxy(key);
             log("[Bot] server_data via game proxy " + key +
                 " returned 403 - quarantined fleet-wide; pulling a replacement from the pool.");
-            if (auto repl = adonai::proxy::next_game_proxy(&*current)) {
+            if (auto repl = nxrth::proxy::next_game_proxy(&*current)) {
                 current = repl;
                 log("[Bot] switched to replacement game proxy " + repl->host + ":" +
                     std::to_string(repl->port) + " - retrying now.");
@@ -188,7 +237,7 @@ std::optional<ServerData> fetch_server_data_free(
 }  // namespace
 
 // ===========================================================================
-// §2.1 free helpers (adonai::bot) — login/connection flavour
+// §2.1 free helpers (nxrth::bot) — login/connection flavour
 // ===========================================================================
 
 std::string default_klv(std::string_view rid, std::string_view hash) {
@@ -198,13 +247,39 @@ std::string default_klv(std::string_view rid, std::string_view hash) {
     } catch (...) {
         hash_val = static_cast<std::int32_t>(std::stol(std::string(consts::DEFAULT_HASH)));
     }
-    return adonai::protocol::compute_klv(consts::GAME_VER, std::to_string(consts::PROTOCOL), rid,
+    return nxrth::protocol::compute_klv(consts::GAME_VER, std::to_string(consts::PROTOCOL), rid,
                                          hash_val);
 }
 
 std::string value_or_default(std::string value, std::string_view def) {
     if (trim_copy(value).empty()) return std::string(def);
     return value;
+}
+
+// Protocol number for the provider-ltoken gateway + redirect packets. The current
+// working reference client sends protocol|225 (with game_version|5.51); default to
+// that, overridable via NXRTH_PLTOKEN_PROTOCOL for empirical iteration.
+std::string provider_login_protocol() {
+    if (const char* p = std::getenv("NXRTH_PLTOKEN_PROTOCOL")) {
+        std::string v = trim_copy(p);
+        if (!v.empty()) return v;
+    }
+    return "225";
+}
+
+std::string build_checktoken_client_data(const LoginIdentity& id, const std::string& meta,
+                                         const std::string& protocol) {
+    // Superset PLAINTEXT clientData (GT ignores unknown keys). Nxrth's check_token
+    // form-encodes this; GT decodes it to plaintext (NOT base64). Load-bearing fields
+    // are the device (rid/mac/vid) + the server_data meta.
+    return "tankIDName|\ntankIDPass|\nrequestedName|\nf|1\nprotocol|" + protocol +
+           "\ngame_version|" + id.game_version + "\nfz|" + id.fz + "\ncbits|" + id.cbits +
+           "\nplayer_age|" + id.player_age + "\nGDPR|" + id.gdpr + "\nFCMToken|\ncategory|" +
+           id.category + "\ntotalPlaytime|0\nklv|" + id.klv + "\nhash2|" + id.hash2 + "\nvid|" +
+           id.vid + "\naid|\nmeta|" + meta + "\nfhash|" + std::to_string(consts::FHASH) + "\nrid|" +
+           id.rid + "\nplatformID|" + id.platform_id + "\ndeviceVersion|0\ncountry|" + id.country +
+           "\nhash|" + id.hash + "\nmac|" + id.mac + "\nwk|" + id.wk + "\nzf|" + id.zf +
+           "\nlmode|1\n";
 }
 
 LoginIdentity resolve_login_identity(const std::optional<LoginIdentity>& in) {
@@ -256,8 +331,7 @@ const char* login_token_field(const std::string& token) {
     return dots >= 2 ? "UbiTicket" : "token";  // >= 3 dot-separated segments -> UbiTicket
 }
 
-std::optional<std::tuple<std::string, std::string, std::string, std::string>> parse_ltoken_string(
-    const std::string& s) {
+std::optional<LtokenRecord> parse_ltoken_string(const std::string& s) {
     std::string t = trim_copy(s);
     if (t.empty()) return std::nullopt;
     std::vector<std::string> parts;
@@ -271,10 +345,94 @@ std::optional<std::tuple<std::string, std::string, std::string, std::string>> pa
         parts.push_back(trim_copy(t.substr(start, bar - start)));
         start = bar + 1;
     }
-    if (parts.size() == 4 && !parts[0].empty()) {
-        return std::make_tuple(parts[0], parts[1], parts[2], parts[3]);
+
+    auto normalized_key = [](std::string key) {
+        key = to_lower_copy(trim_copy(key));
+        key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char c) {
+                      return c == '_' || c == '-';
+                  }),
+                  key.end());
+        return key;
+    };
+    auto valid_decimal = [](const std::string& value, std::size_t max_len) {
+        return !value.empty() && value.size() <= max_len &&
+               std::all_of(value.begin(), value.end(),
+                           [](unsigned char c) { return std::isdigit(c) != 0; });
+    };
+    auto valid_platform = [](const std::string& value) {
+        return !value.empty() && value.size() <= 16 && value.front() != ',' &&
+               value.back() != ',' &&
+               std::all_of(value.begin(), value.end(), [](unsigned char c) {
+                   return std::isdigit(c) != 0 || c == ',';
+               });
+    };
+    auto safe_text = [](const std::string& value, std::size_t max_len) {
+        return !value.empty() && value.size() <= max_len &&
+               value.find_first_of("\r\n") == std::string::npos;
+    };
+
+    bool keyed = false;
+    for (const auto& part : parts) {
+        const auto colon = part.find(':');
+        if (colon == std::string::npos) continue;
+        const std::string key = normalized_key(part.substr(0, colon));
+        if (key == "token" || key == "refreshtoken" || key == "rid" || key == "mac" ||
+            key == "wk" || key == "platform" || key == "platformid" || key == "name" ||
+            key == "username" || key == "cbits" || key == "playerage" || key == "vid") {
+            keyed = true;
+            break;
+        }
     }
-    return std::make_tuple(t, std::string(), std::string(), std::string());
+
+    LtokenRecord record;
+    if (!keyed) {
+        if (parts.size() != 4) return std::nullopt;
+        record.token = parts[0];
+        record.rid = parts[1];
+        record.mac = parts[2];
+        record.wk = parts[3];
+    } else {
+        std::unordered_set<std::string> seen;
+        for (const auto& part : parts) {
+            const auto colon = part.find(':');
+            if (colon == std::string::npos) continue;  // tolerate provider extensions
+            std::string key = normalized_key(part.substr(0, colon));
+            std::string value = trim_copy(part.substr(colon + 1));
+            const bool refresh_token_key = key == "refreshtoken";
+            if (refresh_token_key) key = "token";
+            if (key == "platformid") key = "platform";
+            if (key == "username") key = "name";
+            const bool known = key == "token" || key == "rid" || key == "mac" || key == "wk" ||
+                               key == "platform" || key == "name" || key == "cbits" ||
+                               key == "playerage" || key == "vid";
+            if (!known) continue;
+            if (!seen.insert(key).second) return std::nullopt;
+
+            if (key == "token") {
+                record.token = std::move(value);
+                record.kind = refresh_token_key ? LtokenRecord::Kind::GoogleRefreshToken
+                                                : LtokenRecord::Kind::ProviderToken;
+            }
+            else if (key == "rid") record.rid = std::move(value);
+            else if (key == "mac") record.mac = std::move(value);
+            else if (key == "wk") record.wk = std::move(value);
+            else if (key == "platform" && valid_platform(value))
+                record.platform_id = std::move(value);
+            else if (key == "name" && safe_text(value, 128))
+                record.name = std::move(value);
+            else if (key == "cbits" && valid_decimal(value, 10))
+                record.cbits = std::move(value);
+            else if (key == "playerage" && valid_decimal(value, 3))
+                record.player_age = std::move(value);
+            else if (key == "vid" && safe_text(value, 128))
+                record.vid = std::move(value);
+        }
+    }
+
+    const bool valid_wk = record.wk.size() == 32 || to_lower_copy(record.wk) == "none0";
+    if (record.token.empty() || record.rid.size() != 32 || record.mac.empty() || !valid_wk)
+        return std::nullopt;
+    return record;
 }
 
 std::optional<SockEndpoint> resolve_endpoint(const std::string& host, std::uint16_t port) {
@@ -301,13 +459,13 @@ std::optional<SockEndpoint> resolve_endpoint(const std::string& host, std::uint1
 
 std::unique_ptr<Bot> Bot::create(
     const std::string& username, const std::string& password, std::optional<Socks5Config> proxy,
-    std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
+    std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
     std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-    CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
+    CmdReceiver cmd_rx, std::shared_ptr<const nxrth::world::ItemsDat> items_dat,
     std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet) {
     LogFn log = make_login_log_fn(state, bot_id, sink);
     stagger_http_login(log);
-    auto creds = adonai::login::fetch_credentials(username, password, proxy, login_proxy, *stop, log);
+    auto creds = nxrth::login::fetch_credentials(username, password, proxy, login_proxy, *stop, log);
     if (!creds) return nullptr;
     LoginMethod lm;
     lm.kind = LoginMethodKind::Legacy;
@@ -318,80 +476,120 @@ std::unique_ptr<Bot> Bot::create(
                                         std::move(sink), std::move(fleet)));
 }
 
-std::unique_ptr<Bot> Bot::create_newly(
-    const std::string& username, const std::string& password, std::optional<Socks5Config> proxy,
-    std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
-    std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-    CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
-    std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet) {
-    LogFn log = make_login_log_fn(state, bot_id, sink);
-    stagger_http_login(log);
-    auto creds =
-        adonai::login::fetch_newly_credentials(username, password, proxy, login_proxy, *stop, log);
-    if (!creds) return nullptr;
-    LoginMethod lm;
-    lm.kind = LoginMethodKind::Newly;
-    lm.password = password;
-    return std::unique_ptr<Bot>(new Bot(username, std::move(lm), std::move(*creds), std::move(proxy),
-                                        std::move(login_proxy), std::move(stop), std::move(state),
-                                        std::move(cmd_rx), std::move(items_dat), bot_id,
-                                        std::move(sink), std::move(fleet)));
-}
-
 std::unique_ptr<Bot> Bot::create_ltoken(
     const std::string& ltoken_str, std::optional<Socks5Config> proxy,
-    std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
+    std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
     std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-    CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
+    CmdReceiver cmd_rx, std::shared_ptr<const nxrth::world::ItemsDat> items_dat,
     std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet) {
     LogFn log = make_login_log_fn(state, bot_id, sink);
 
     auto parsed = parse_ltoken_string(ltoken_str);
     if (!parsed) {
-        log("[Bot] Invalid ltoken string — expected token|rid|mac|wk; not spawning bot");
+        log("[Bot] Invalid ltoken string - expected refreshToken|rid|mac|wk or a keyed "
+            "mac:/wk:/rid:/token: record; not spawning bot");
         return nullptr;
     }
-    const auto& [tok, rid, mac, wk] = *parsed;
+
+    const bool google_refresh_token =
+        parsed->kind == LtokenRecord::Kind::GoogleRefreshToken;
 
     LoginIdentity id;
-    id.rid = value_or_default(rid, consts::DEFAULT_RID);
-    id.mac = value_or_default(mac, consts::DEFAULT_MAC);
-    id.wk = value_or_default(wk, consts::DEFAULT_WK);
-    id.hash = std::string(consts::DEFAULT_HASH);
-    id.hash2 = std::string(consts::DEFAULT_HASH2);
-    id.fz = std::string(consts::DEFAULT_FZ);
+    id.rid = parsed->rid;
+    id.mac = parsed->mac;
+    id.wk = parsed->wk;  // provider records ship wk:NONE0; kept LITERALLY
+    id.hash = std::to_string(nxrth::protocol::hash_string(id.mac + "RT"));
     id.game_version = std::string(consts::GAME_VER);
-    id.cbits = "1536";
-    id.player_age = "23";
-    id.gdpr = "2";
-    id.category = "_16";
+    id.category = "_-5100";
     id.total_playtime = "0";
-    id.country = "us";
-    id.zf = std::string(consts::DEFAULT_ZF);
-    id.platform_id = std::string(consts::DEFAULT_PLATFORM_ID);
-    id.steam_token = std::string(consts::DEFAULT_STEAM_TOKEN);
-    id.klv = default_klv(id.rid, id.hash);
+    id.fz = "22243512";
+    id.zf = "31631978";
+    id.steam_token.clear();
+    if (google_refresh_token) {
+        // core.rs checktoken clientData identity (the exchanged-token path).
+        id.hash2 = std::to_string(
+            nxrth::protocol::hash_string(nxrth::protocol::random_hex(16) + "RT"));
+        id.cbits = "1024";
+        id.player_age = "20";
+        id.gdpr = "2";
+        id.country = "jp";
+        id.platform_id = "0,1,1";
+        id.klv = default_klv(id.rid, id.hash);
+    } else {
+        // Provider (Apple/Google) refresh token. This identity feeds the checktoken
+        // clientData AND the subserver/redirect packet, matching the working reference
+        // client: platformID|1, hash2 == hash, + vid/aid. (The first GATEWAY packet is
+        // the bare core.rs form protocol|226/ltoken/platformID|2 — see build_login_packet.)
+        id.vid = parsed->vid.value_or(std::string());
+        // Provider deliveries carry the device values used to mint the refresh
+        // token. Preserve them in checktoken clientData and the redirect identity;
+        // records without those optional fields keep the proven defaults.
+        id.cbits = parsed->cbits.value_or("1024");
+        id.player_age = parsed->player_age.value_or("19");
+        id.gdpr = "1";
+        id.country = "tr";
+        id.platform_id = parsed->platform_id.value_or("1");
+        id.hash2 = id.hash;  // working reference sends hash2 == hash
+        int hv = 0;
+        try {
+            hv = std::stoi(id.hash);
+        } catch (...) {
+            hv = 0;
+        }
+        id.klv = nxrth::protocol::compute_klv(consts::GAME_VER, provider_login_protocol(),
+                                               id.rid, hv);
+    }
 
     stagger_http_login(log);
-    auto sd = fetch_server_data_free(proxy, login_proxy, *stop, log);
+    auto sd = fetch_ltoken_server_data(proxy, login_proxy, google_refresh_token, *stop, log);
     if (!sd) return nullptr;
-    if (!resolve_endpoint(sd->server, sd->port)) {
-        log("[Bot] invalid server address '" + sd->server + ":" + std::to_string(sd->port) +
-            "' — not spawning bot");
+    if (!resolve_endpoint(sd->data.server, sd->data.port)) {
+        log("[Bot] invalid server address '" + sd->data.server + ":" +
+            std::to_string(sd->data.port) + "' — not spawning bot");
         return nullptr;
     }
 
+    // BOTH the provider (Apple/Google) and refreshToken records validate through
+    // /player/growid/checktoken: POST refreshToken=<record token> + a PLAINTEXT
+    // clientData carrying THIS device + the server_data `meta`. checktoken returns the
+    // fresh session ltoken that the ENet gateway accepts. (Verified empirically:
+    // the raw record token is a refresh token — the gateway rejects it directly with
+    // "Fail to login. Please try again in 30 seconds."; klv/hash are not validated,
+    // but the device rid/mac/vid and a real meta are required, and clientData must be
+    // plaintext form-encoded, NOT base64.)
     Credentials creds;
-    creds.ltoken = tok;
-    creds.meta = sd->meta;
-    creds.server = sd->server;
-    creds.port = sd->port;
-    creds.identity = id;  // bypass_enet stays empty for ltoken (no logon-IP pinning)
+    const bool provider = !google_refresh_token;
+    const std::string client_data = build_checktoken_client_data(
+        id, sd->data.meta,
+        provider ? provider_login_protocol() : std::to_string(consts::PROTOCOL));
+
+    log("[Bot] validating " + std::string(provider ? "provider" : "Google OAuth") +
+        " ltoken through checktoken (" + nxrth::login::token_fingerprint(parsed->token) + ")");
+    auto checked = nxrth::login::check_token(parsed->token, client_data, sd->http_proxy_url);
+    if (!checked.ok()) {
+        const std::string reason = checked.error ? checked.error->display() : "unknown error";
+        log("[Bot] ltoken validation failed: " + reason + " - stopping bot");
+        stop->store(true);
+        return nullptr;
+    }
+    creds.ltoken = std::move(*checked.token);
+    log("[Bot] ltoken validated via checktoken; session ltoken " +
+        nxrth::login::token_fingerprint(creds.ltoken));
+    creds.meta = sd->data.meta;
+    creds.server = sd->data.server;
+    creds.port = sd->data.port;
+    creds.identity = id;
+    if (!google_refresh_token) creds.bypass_enet = std::move(sd->provider_enet);
 
     LoginMethod lm;
-    lm.kind = LoginMethodKind::Ltoken;
-    return std::unique_ptr<Bot>(new Bot(std::string(), std::move(lm), std::move(creds),
-                                        std::move(proxy), std::move(login_proxy), std::move(stop),
+    lm.kind = google_refresh_token ? LoginMethodKind::Ltoken
+                                   : LoginMethodKind::ProviderLtoken;
+    lm.source_token = parsed->token;  // original refresh token, re-exchanged on reconnect
+    if (google_refresh_token) login_proxy.reset();
+    return std::unique_ptr<Bot>(new Bot(parsed->name.value_or(std::string()), std::move(lm),
+                                        std::move(creds),
+                                        std::move(proxy), std::move(login_proxy),
+                                        std::move(stop),
                                         std::move(state), std::move(cmd_rx), std::move(items_dat),
                                         bot_id, std::move(sink), std::move(fleet)));
 }
@@ -399,9 +597,9 @@ std::unique_ptr<Bot> Bot::create_ltoken(
 // --- private full constructor (§2.4 new_with_credentials, §2.5 defaults) -----
 Bot::Bot(std::string username, LoginMethod login_method, Credentials creds,
          std::optional<Socks5Config> proxy,
-         std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
+         std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
          std::shared_ptr<std::atomic<bool>> stop, std::shared_ptr<SharedBotState> state,
-         CmdReceiver cmd_rx, std::shared_ptr<const adonai::world::ItemsDat> items_dat,
+         CmdReceiver cmd_rx, std::shared_ptr<const nxrth::world::ItemsDat> items_dat,
          std::uint32_t bot_id, EventSinkPtr sink, FleetHandle fleet)
     : proxy_(std::move(proxy)),
       login_proxy_(std::move(login_proxy)),
@@ -452,8 +650,8 @@ Bot::~Bot() = default;
 // which logs the proxy URL, retries the SOCKS5 UDP bind 4× / 300 ms, then falls
 // back to a DEAD loopback socket — never a leaking direct connection).
 // ===========================================================================
-adonai::net::BotHost Bot::create_host(const Socks5Config* proxy) {
-    return adonai::net::BotHost::create(proxy);
+nxrth::net::BotHost Bot::create_host(const Socks5Config* proxy) {
+    return nxrth::net::BotHost::create(proxy);
 }
 
 // ===========================================================================
@@ -484,12 +682,16 @@ void Bot::run(std::shared_ptr<std::atomic<bool>> stop_flag) {
         // (4) drain UI/manager commands.
         drain_commands();
 
-        // (5) publish ping.
-        if (peer_id_) {
+        const auto loop_now = Clock::now();
+
+        // (5) Publish ping at telemetry cadence. ENet is still serviced every
+        // 10 ms below; RTT does not need thousands of shared-state writes/sec.
+        if (peer_id_ && loop_now >= ping_timer_) {
+            ping_timer_ = loop_now + std::chrono::seconds(1);
             std::uint32_t rtt = host_.peer_rtt(*peer_id_);
-            if (state_) state_->write([&](BotState& s) { s.ping_ms = rtt; });
             if (rtt != last_ping_) {
                 last_ping_ = rtt;
+                if (state_) state_->write([&](BotState& s) { s.ping_ms = rtt; });
                 notify_dirty();
             }
         }
@@ -503,7 +705,7 @@ void Bot::run(std::shared_ptr<std::atomic<bool>> stop_flag) {
             log_console(
                 "[Bot] login stalled — 30s connected with no world (flaky game proxy?); dropping to "
                 "retry via gateway");
-            if (auto fresh = adonai::proxy::next_game_proxy(proxy_ ? &*proxy_ : nullptr)) {
+            if (auto fresh = nxrth::proxy::next_game_proxy(proxy_ ? &*proxy_ : nullptr)) {
                 log_console("[Bot] rotating game proxy after stall → " + fresh->host + ":" +
                             std::to_string(fresh->port));
                 proxy_ = fresh;
@@ -516,10 +718,17 @@ void Bot::run(std::shared_ptr<std::atomic<bool>> stop_flag) {
             if (peer_id_) host_.peer_disconnect(*peer_id_, 0);
         }
 
-        // (8) native fleet-aware automation dispatch (replaces Mori's Lua script channel).
+        // (8) Fleet telemetry and automation use separate cadences from ENet.
+        // Actions themselves retain their original delays and keep ENet serviced.
         if (fleet_) {
-            publish_fleet_view();
-            run_automation(*fleet_);
+            if (loop_now >= fleet_publish_timer_) {
+                fleet_publish_timer_ = loop_now + std::chrono::milliseconds(250);
+                publish_fleet_view();
+            }
+            if (loop_now >= automation_timer_) {
+                automation_timer_ = loop_now + std::chrono::milliseconds(50);
+                run_automation(*fleet_);
+            }
         }
 
         // (9) auto-collect tick.
@@ -572,7 +781,7 @@ void Bot::shutdown() {
 // ===========================================================================
 // §2.8 Connect / Disconnect state machine
 // ===========================================================================
-void Bot::on_connect(adonai::net::PeerId id) {
+void Bot::on_connect(nxrth::net::PeerId id) {
     peer_id_ = id;
     saw_server_hello_ = false;
     connected_since_ = Clock::now();
@@ -582,7 +791,7 @@ void Bot::on_connect(adonai::net::PeerId id) {
     log_console("[Bot] Connected: peer " + std::to_string(id.index));
 }
 
-void Bot::on_disconnect(adonai::net::PeerId id, std::uint32_t data) {
+void Bot::on_disconnect(nxrth::net::PeerId id, std::uint32_t data) {
     peer_id_.reset();
     connected_since_.reset();
     pathfind_target_.reset();
@@ -628,7 +837,7 @@ void Bot::on_disconnect(adonai::net::PeerId id, std::uint32_t data) {
                 return;
             }
             if (redirect_connect_fails_ >= 2) {
-                if (auto fresh = adonai::proxy::next_game_proxy(proxy_ ? &*proxy_ : nullptr)) {
+                if (auto fresh = nxrth::proxy::next_game_proxy(proxy_ ? &*proxy_ : nullptr)) {
                     log_console(
                         "[Bot] redirect: subserver unreachable via current game proxy — rotating "
                         "to " +
@@ -641,8 +850,12 @@ void Bot::on_disconnect(adonai::net::PeerId id, std::uint32_t data) {
             // login used) instead of nullptr. nullptr -> create_host binds a DEAD
             // loopback (anti-leak), which makes the subserver connect ALWAYS fail ->
             // 6 fails -> a needless full re-login on every warp for bypass-only bots.
+            const bool provider_ready = login_method_.kind == LoginMethodKind::ProviderLtoken;
+            const bool using_game_proxy = !provider_ready && proxy_.has_value();
             const Socks5Config* world_proxy =
-                proxy_ ? &*proxy_ : (bypass_enet_ ? &*bypass_enet_ : nullptr);
+                provider_ready && bypass_enet_ ? &*bypass_enet_
+                                               : (proxy_ ? &*proxy_
+                                                         : (bypass_enet_ ? &*bypass_enet_ : nullptr));
             log_console("[Bot] Redirecting to " + r.server + ":" + std::to_string(r.port) +
                         (world_proxy ? "" : " (no proxy - dead loopback, will fail)"));
             host_ = create_host(world_proxy);
@@ -650,7 +863,7 @@ void Bot::on_disconnect(adonai::net::PeerId id, std::uint32_t data) {
             // This leg is the world/subserver connect. When a dedicated GAME proxy
             // carries it, a drop before ServerHello means THAT proxy can't reach the
             // world -> the world-join handler in on_disconnect will rotate it.
-            on_subserver_connect_ = proxy_.has_value();
+            on_subserver_connect_ = using_game_proxy;
             host_.connect(ep->addr(), ep->len, kHostChannelLimit, 0);
         } else {
             log_console("[Bot] Invalid redirect address '" + r.server + ":" +
@@ -685,8 +898,8 @@ void Bot::on_disconnect(adonai::net::PeerId id, std::uint32_t data) {
                         std::to_string(subserver_connect_fails_) + "/2)");
             if (subserver_connect_fails_ >= 2) {
                 const std::string key = proxy_->host + ":" + std::to_string(proxy_->port);
-                adonai::proxy::quarantine_proxy(key);
-                if (auto fresh = adonai::proxy::next_game_proxy(&*proxy_)) {
+                nxrth::proxy::quarantine_proxy(key);
+                if (auto fresh = nxrth::proxy::next_game_proxy(&*proxy_)) {
                     proxy_ = fresh;
                     log_console("[Bot] world-join keeps failing via game proxy " + key +
                                 " (error connecting) - rotating game proxy to " + fresh->host +
@@ -806,13 +1019,13 @@ void Bot::quarantine_logon_ip(const std::string& reason) {
     if (bypass_enet_) {
         const std::string key =
             bypass_enet_->host + ":" + std::to_string(bypass_enet_->port);
-        adonai::proxy::quarantine_proxy(key);
+        nxrth::proxy::quarantine_proxy(key);
         log_console("[Bot] logon exit IP " + key + " rate-limited (" + reason +
                     ") - quarantined fleet-wide; re-login will pin a fresh bypass IP");
     } else if (proxy_) {
         const std::string key = proxy_->host + ":" + std::to_string(proxy_->port);
-        adonai::proxy::quarantine_proxy(key);
-        if (auto fresh = adonai::proxy::next_game_proxy(&*proxy_)) {
+        nxrth::proxy::quarantine_proxy(key);
+        if (auto fresh = nxrth::proxy::next_game_proxy(&*proxy_)) {
             proxy_ = fresh;
             log_console("[Bot] logon exit IP " + key + " rate-limited (" + reason +
                         ") - quarantined + rotated game proxy to " + fresh->host + ":" +
@@ -883,7 +1096,7 @@ void Bot::reconnect_main(bool refresh_token) {
     }
     if (candidates.empty()) candidates.push_back({"direct", std::nullopt});
 
-    adonai::net::LoginInfo login_info;
+    nxrth::net::LoginInfo login_info;
     login_info.protocol = consts::PROTOCOL;
     login_info.game_version = std::string(consts::GAME_VER);
 
@@ -901,7 +1114,7 @@ void Bot::reconnect_main(bool refresh_token) {
                 log_console("[Bot] reconnect: fetching server_data (alternate=" +
                             std::string(alternate ? "true" : "false") + ", http_proxy=" +
                             cand.label + ")...");
-                auto res = adonai::net::get_server_data_proxied(alternate, login_info, cand.url);
+                auto res = nxrth::net::get_server_data_proxied(alternate, login_info, cand.url);
                 if (res.ok()) {
                     found = res.data;
                     got = true;
@@ -961,30 +1174,64 @@ void Bot::schedule_reconnect(const std::string& reason, bool refresh_token,
 // §2.14 refresh_token / apply_credentials / apply_login_identity
 // ===========================================================================
 void Bot::refresh_token() {
-    // NOTE: the check_token fast-path is disabled entirely — go straight to the
-    // login-method fallback.
     LogFn log = [this](const std::string& m) { log_console(m); };
     switch (login_method_.kind) {
-        case LoginMethodKind::Ltoken:
-            log_console("[Bot] ltoken login — no fallback credentials, stopping bot");
-            stop_requested_ = true;
+        case LoginMethodKind::Ltoken: {
+            pace_http_login();
+            std::optional<std::string> proxy_url;
+            if (proxy_) proxy_url = socks5_to_url(*proxy_);
+            auto checked = nxrth::login::check_token(ltoken_, build_login_data(), proxy_url);
+            if (checked.ok()) {
+                ltoken_ = std::move(*checked.token);
+                log_console("[Bot] Google OAuth ltoken refreshed via checktoken");
+            } else {
+                const std::string reason =
+                    checked.error ? checked.error->display() : "unknown error";
+                log_console("[Bot] Google OAuth ltoken refresh failed: " + reason +
+                            " - stopping bot");
+                stop_requested_ = true;
+            }
             break;
+        }
+        case LoginMethodKind::ProviderLtoken: {
+            pace_http_login();
+            auto refreshed = fetch_ltoken_server_data(proxy_, login_proxy_, false, *stop_, log);
+            if (!refreshed) {
+                stop_requested_ = true;
+                break;
+            }
+            auto endpoint = resolve_endpoint(refreshed->data.server, refreshed->data.port);
+            if (!endpoint) {
+                log_console("[Bot] provider token retry: invalid server address - stopping bot");
+                stop_requested_ = true;
+                break;
+            }
+            meta_ = refreshed->data.meta;
+            // Re-exchange the ORIGINAL refresh token for a fresh session ltoken bound to
+            // the new server_data session (the prior session ltoken is single-session).
+            const std::string client_data = build_checktoken_client_data(
+                login_identity_view(), meta_, provider_login_protocol());
+            auto checked = nxrth::login::check_token(login_method_.source_token, client_data,
+                                                      refreshed->http_proxy_url);
+            if (!checked.ok()) {
+                const std::string reason =
+                    checked.error ? checked.error->display() : "unknown error";
+                log_console("[Bot] provider ltoken re-validation failed: " + reason +
+                            " - stopping bot");
+                stop_requested_ = true;
+                break;
+            }
+            ltoken_ = std::move(*checked.token);
+            server_addr_ = std::move(endpoint);
+            bypass_enet_ = std::move(refreshed->provider_enet);  // empty in game-proxy mode
+            log_console("[Bot] provider ltoken re-validated via checktoken on a fresh session");
+            break;
+        }
         case LoginMethodKind::Legacy: {
             log_console("[Bot] falling back to full re-login");
             pace_http_login();
-            auto creds = adonai::login::fetch_credentials(username_, login_method_.password, proxy_,
+            auto creds = nxrth::login::fetch_credentials(username_, login_method_.password, proxy_,
                                                           login_proxy_, *stop_, log);
-            if (creds)
-                apply_credentials(*creds);
-            else
-                stop_requested_ = true;
-            break;
-        }
-        case LoginMethodKind::Newly: {
-            log_console("[Bot] falling back to newly re-login");
-            pace_http_login();
-            auto creds = adonai::login::fetch_newly_credentials(
-                username_, login_method_.password, proxy_, login_proxy_, *stop_, log);
             if (creds)
                 apply_credentials(*creds);
             else
@@ -1025,6 +1272,7 @@ void Bot::apply_login_identity(const LoginIdentity& identity) {
     platform_id_ = r.platform_id;
     steam_token_ = r.steam_token;
     klv_ = r.klv;
+    vid_ = r.vid;
     if (state_) state_->write([&](BotState& s) { s.mac = mac_; });
 }
 
@@ -1046,15 +1294,15 @@ void Bot::add_automation_module(std::unique_ptr<AutomationModule> mod) {
 
 void Bot::run_automation(FleetState& fleet) {
     if (automation_modules_.empty()) return;
-    AutomationConfig cfg = fleet.config_snapshot();
+    const auto cfg = fleet.config_handle();
     for (auto& mod : automation_modules_) {
         const std::string module_name = mod->name();
-        const bool enabled = cfg.is_on_for(module_name, bot_id_);
+        const bool enabled = cfg->is_on_for(module_name, bot_id_);
         const bool was_enabled = automation_module_enabled_[module_name];
         if (enabled && !was_enabled) mod->on_enabled(*this, fleet);
         if (!enabled && was_enabled) mod->on_disabled(*this, fleet);
         automation_module_enabled_[module_name] = enabled;
-        if (enabled) mod->tick(*this, fleet);
+        if (enabled) mod->tick(*this, fleet, *cfg);
     }
 }
 
@@ -1063,17 +1311,19 @@ void Bot::publish_fleet_view() {
     BotView v;
     v.id = bot_id_;
     if (state_) {
-        BotState snap = state_->snapshot();
-        v.username = snap.username;
-        v.status = snap.status;
-        v.world_name = snap.world_name;
-        v.pos_x = snap.pos_x;
-        v.pos_y = snap.pos_y;
-        v.gems = snap.gems;
-        v.ping_ms = snap.ping_ms;
+        state_->read([&](const BotState& s) {
+            v.username = s.username;
+            v.status = s.status;
+            v.world_name = s.world_name;
+            v.pos_x = s.pos_x;
+            v.pos_y = s.pos_y;
+            v.gems = s.gems;
+            v.ping_ms = s.ping_ms;
+            return 0;
+        });
     }
     if (proxy_) v.proxy_key = proxy_->host + ":" + std::to_string(proxy_->port);
     fleet_->upsert(v);
 }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

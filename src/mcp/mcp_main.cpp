@@ -4,6 +4,6 @@
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--self-test") == 0)
-        return adonai::mcp::run_self_test();
-    return adonai::mcp::run_stdio_server();
+        return nxrth::mcp::run_self_test();
+    return nxrth::mcp::run_stdio_server();
 }

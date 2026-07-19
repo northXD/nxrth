@@ -1,4 +1,4 @@
-// Adonai UI theme: modern dark ImGui style + font loading (Tahoma + FontAwesome 6).
+// Nxrth UI theme: modern dark ImGui style + font loading (Tahoma + FontAwesome 6).
 #include "imgui.h"
 #include "ui/theme.h"
 #include "ui/icons_fa.h"
@@ -6,7 +6,7 @@
 #include <windows.h>
 #include <string>
 
-namespace adonai::ui {
+namespace nxrth::ui {
 namespace {
 
 // Stored fonts, resolved by LoadFonts(). ImGui owns the atlas; these are views.
@@ -17,6 +17,21 @@ ImFont* g_font_icons_big = nullptr;
 
 // ImGui keeps the pointer to the glyph range, so it must outlive the frame.
 static const ImWchar kIconRange[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+
+// Text glyphs to rasterize for the body/bold/title faces. The default ImGui range
+// stops at U+00FF (covers ç ö ü) but NOT the Turkish letters ğ Ğ ş Ş ı İ, which
+// live in Latin Extended-A — without this range they render as '?'/garbage. We
+// also pull in General Punctuation (smart quotes, dashes, ellipsis, bullet) and
+// currency symbols (₺ €) so AI answers and UI text display fully. Missing glyphs
+// are simply skipped by the atlas builder, so an over-broad range is harmless.
+static const ImWchar kTextRange[] = {
+    0x0020, 0x00FF,  // Basic Latin + Latin-1 Supplement
+    0x0100, 0x017F,  // Latin Extended-A  (Turkish ğ Ğ ş Ş ı İ + Central-European)
+    0x0180, 0x024F,  // Latin Extended-B
+    0x2010, 0x2027,  // General Punctuation (– — ' ' " " … •)
+    0x20A0, 0x20BF,  // Currency symbols (₺ Turkish lira, €, etc.)
+    0,
+};
 
 // Absolute path to a font inside the Windows Fonts directory.
 std::string WinFont(const char* name) {
@@ -42,7 +57,7 @@ void MergeIcons(ImFontAtlas* atlas, const char* fa_path, float size) {
 // Returns nullptr if the Tahoma file could not be loaded.
 ImFont* AddTextFont(ImFontAtlas* atlas, const std::string& tahoma,
                     float size, const char* fa_path) {
-    ImFont* f = atlas->AddFontFromFileTTF(tahoma.c_str(), size);
+    ImFont* f = atlas->AddFontFromFileTTF(tahoma.c_str(), size, nullptr, kTextRange);
     if (!f) return nullptr;
     MergeIcons(atlas, fa_path, size);
     return f;
@@ -159,7 +174,9 @@ void LoadFonts() {
 
     const std::string tahoma   = WinFont("tahoma.ttf");
     const std::string tahomabd = WinFont("tahomabd.ttf");
-    const char* fa = "C:\\Adonai\\data\\fonts\\fa-solid-900.ttf";
+    // Relative to the working directory (the app is launched with its project
+    // root as CWD), so no absolute install path is baked in.
+    const char* fa = "data\\fonts\\fa-solid-900.ttf";
 
     // Body (regular Tahoma ~16) + merged icons. This is the default font.
     g_font_body = AddTextFont(atlas, tahoma, 16.0f, fa);
@@ -192,4 +209,4 @@ ImFont* FontBold()       { return g_font_bold; }
 ImFont* FontTitle()      { return g_font_title; }
 ImFont* FontIconsLarge() { return g_font_icons_big; }
 
-} // namespace adonai::ui
+} // namespace nxrth::ui

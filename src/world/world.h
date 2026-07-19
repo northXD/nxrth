@@ -1,4 +1,4 @@
-// Adonai — world map model + SendMapData byte parser (ported from Mori/world/mod_impl.rs).
+// Nxrth — world map model + SendMapData byte parser (ported from Mori/world/mod_impl.rs).
 // Byte-exact reimplementation of the SendMapData blob (tiles, per-tile extra
 // data, ground objects) plus incremental tile updates and coordinate helpers.
 // GT is little-endian throughout; strings are UTF-8 (lossy). Per-bot state,
@@ -17,7 +17,7 @@
 #include "core/cursor.h"
 #include "world/items.h"
 
-namespace adonai::world {
+namespace nxrth::world {
 
 // --- Constants (world/constants.rs) -----------------------------------------
 inline constexpr std::uint16_t MAP_VERSION_MIN = 0x19;       // 25
@@ -261,7 +261,10 @@ struct WorldTileMap {
     std::uint32_t height = 0;
     std::vector<Tile> tiles;     // row-major: index = y*width + x
 
-    static WorldTileMap parse(Cursor& cur, std::uint16_t map_version);
+    // Parse the tile array. Sets out_truncated=true if it stopped early on an
+    // unsupported tile-extra block (tail padded with empty tiles; caller must then
+    // skip the trailer + object stream, which is desynced from that point).
+    static WorldTileMap parse(Cursor& cur, std::uint16_t map_version, bool& out_truncated);
 };
 
 // --- WorldObject (dropped ground item) --------------------------------------
@@ -350,4 +353,4 @@ std::vector<std::pair<std::uint16_t, std::uint8_t>> build_collision_tiles(
 // True if any Lock tile (with a LOCK_ITEM_IDS fg) grants this user access.
 bool world_has_access(const World& world, std::uint32_t user_id);
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

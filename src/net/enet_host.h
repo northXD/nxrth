@@ -1,4 +1,4 @@
-// Adonai — thin C++ wrapper over the vendored C ENet (ported from Mori's
+// Nxrth — thin C++ wrapper over the vendored C ENet (ported from Mori's
 // `BotHost` enum + `Bot::create_host`, port spec 06 §1.3 / §2.2 / §2.3).
 //
 // One BotHost owns one ENetHost. Its underlying UDP socket may be either a plain
@@ -8,7 +8,7 @@
 // behaviour lives in the vendored ENet's *patched socket layer*, not in the host
 // type (see the patch contract at the bottom of this file + third_party/enet/README.md).
 //
-// The ENet dependency is guarded by ADONAI_HAVE_ENET so this unit compiles before
+// The ENet dependency is guarded by NXRTH_HAVE_ENET so this unit compiles before
 // ENet is vendored: without it, create() logs and yields an inert host and every
 // method is a safe no-op. The SOCKS5 relay registry + its C-ABI (used by the
 // patched enet_socket_send/receive in win32.c) are always compiled.
@@ -36,7 +36,7 @@
 struct _ENetHost;
 struct _ENetPeer;
 
-namespace adonai::net {
+namespace nxrth::net {
 
 // ---------------------------------------------------------------------------
 // Tuning constants (load-bearing; do not change — port spec 06 §2.3 / §2.8)
@@ -111,7 +111,7 @@ public:
     std::optional<HostEvent> next_event();
 
     // Begin connecting to `addr`. On failure logs and returns false (Mori
-    // `.expect` panics; Adonai must not abort the process — the run loop retries).
+    // `.expect` panics; Nxrth must not abort the process — the run loop retries).
     bool connect(const sockaddr* addr, socklen_t addr_len,
                  std::size_t channel_count = kHostChannelLimit,
                  std::uint32_t data = 0);
@@ -149,11 +149,11 @@ private:
 // third_party/enet/README.md) call these on the host's own socket handle. When a
 // relay is registered for that socket:
 //   * send    — build the RFC 1928 §7 UDP header for the REAL target address with
-//               adonai_socks5_build_header, prepend it to the ENet payload, and
+//               nxrth_socks5_build_header, prepend it to the ENet payload, and
 //               sendto the returned relay address instead of the peer. Return the
 //               PAYLOAD byte count (not the on-wire length); 0 on WouldBlock /
 //               partial; swallow other errors as 0.
-//   * receive — recvfrom the socket, adonai_socks5_parse_header to strip the
+//   * receive — recvfrom the socket, nxrth_socks5_parse_header to strip the
 //               header, report the decapsulated real source to ENet, memmove the
 //               payload to the buffer front. On WouldBlock AND any other error
 //               (esp. WSAECONNRESET / 10054) report "no packet", never propagate.
@@ -163,19 +163,19 @@ extern "C" {
 
 // Returns 1 and fills *out_addr (with *out_len) if a SOCKS5 relay is bound to the
 // given socket handle ((intptr_t)host->socket); returns 0 otherwise.
-int adonai_socks5_relay_for(std::intptr_t socket_handle,
+int nxrth_socks5_relay_for(std::intptr_t socket_handle,
                             struct sockaddr_storage* out_addr, int* out_len);
 
 // Build the per-datagram SOCKS5 UDP request header for `target` into `out`
 // (capacity `cap`). Returns the header length (10 IPv4 / 22 IPv6) or -1 on error.
-int adonai_socks5_build_header(const struct sockaddr* target,
+int nxrth_socks5_build_header(const struct sockaddr* target,
                                unsigned char* out, int cap);
 
 // Validate + locate the payload inside a relayed datagram. On success returns the
 // payload length, sets *payload_off to the header length (payload begins there)
 // and fills *src (*src_len) with the real source. Returns -1 on any malformation
 // (RSV/FRAG/ATYP/short) — the caller drops the datagram silently.
-int adonai_socks5_parse_header(const unsigned char* data, int len,
+int nxrth_socks5_parse_header(const unsigned char* data, int len,
                                struct sockaddr_storage* src, int* src_len,
                                int* payload_off);
 
@@ -187,4 +187,4 @@ void socks5_relay_register(std::intptr_t socket_handle,
                            const sockaddr* relay_addr, socklen_t relay_len);
 void socks5_relay_unregister(std::intptr_t socket_handle);
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

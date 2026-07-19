@@ -1,4 +1,4 @@
-// Adonai — per-bot shared snapshot + command surface (ported from Mori
+// Nxrth — per-bot shared snapshot + command surface (ported from Mori
 // bot_state.rs + player.rs; port spec 09 §1). This is the read-mostly mirror the
 // bot's worker thread WRITES and the UI/fleet layer READS, plus the UI->bot
 // command channel and the player value types.
@@ -21,9 +21,9 @@
 #include <variant>
 #include <vector>
 
-#include "world/world.h"  // adonai::world::TileType
+#include "world/world.h"  // nxrth::world::TileType
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 // ---------------------------------------------------------------------------
 // §1.1 BotStatus — the fleet status column. Display strings are load-bearing
@@ -61,7 +61,7 @@ struct TileInfo {
     std::uint16_t fg_item_id = 0;
     std::uint16_t bg_item_id = 0;
     std::uint16_t flags = 0;
-    adonai::world::TileType tile_type;  // default Basic
+    nxrth::world::TileType tile_type;  // default Basic
 };
 
 struct PlayerInfo {
@@ -127,9 +127,12 @@ struct BotState {
     std::vector<InvSlot> inventory;
     std::uint32_t inventory_size = 0;
     std::int32_t gems = 0;
-    std::vector<std::string> console;  // per-bot SYSTEM log ring (Logs tab), cap 300
-    std::vector<std::string> chat;     // in-game console/chat ring (Console tab), cap 300
+    std::deque<std::string> console;  // per-bot SYSTEM log ring (Logs tab), cap 300
+    std::deque<std::string> chat;     // in-game console/chat ring (Console tab), cap 300
     std::uint64_t chat_base_index = 0; // absolute index of chat.front(); survives ring eviction
+    std::deque<std::string> traffic;  // incoming/outgoing packet log (Traffic tab), cap 300
+    bool traffic_enabled = false;     // gates packet capture; off by default (opt-in)
+    bool logs_enabled = false;        // gates the per-bot SYSTEM log ring; off by default (opt-in)
     std::uint32_t ping_ms = 0;
     BotDelays delays;
     std::optional<TrackInfo> track_info;
@@ -227,6 +230,8 @@ struct ActivateTile { std::int32_t x = 0, y = 0; };
 struct Enter { std::optional<std::string> password; };
 struct Face { bool left = false; };
 struct WrenchPlayer { std::uint32_t net_id = 0; };
+struct SetTrafficLog { bool enabled = false; };  // per-bot incoming/outgoing packet capture
+struct SetLogging { bool enabled = false; };     // per-bot SYSTEM log ring capture (Logs tab)
 }  // namespace cmd
 
 using BotCommand =
@@ -235,7 +240,8 @@ using BotCommand =
                  cmd::Unwear, cmd::Drop, cmd::Trash, cmd::LeaveWorld, cmd::Respawn, cmd::FindPath,
                  cmd::SetDelays, cmd::SetAutoCollect, cmd::SetCollectConfig, cmd::SetAutoReconnect,
                  cmd::AcceptAccess, cmd::CollectObject, cmd::CollectNearby, cmd::ActivateItem,
-                 cmd::ActivateTile, cmd::Enter, cmd::Face, cmd::WrenchPlayer>;
+                 cmd::ActivateTile, cmd::Enter, cmd::Face, cmd::WrenchPlayer, cmd::SetTrafficLog,
+                 cmd::SetLogging>;
 
 // ---------------------------------------------------------------------------
 // §3.14 CommandQueue<T> — MPSC, unbounded, closable. Replaces std::mpsc /
@@ -297,6 +303,10 @@ public:
     virtual void bot_added(std::uint32_t bot_id, const std::string& username) {}
     virtual void bot_removed(std::uint32_t bot_id) {}
     virtual void console(std::uint32_t bot_id, const std::string& message) {}
+    virtual bool wants_traffic(std::uint32_t bot_id) const {
+        (void)bot_id;
+        return false;
+    }
     virtual void traffic(std::uint32_t bot_id, const std::string& direction,
                          const std::string& kind, std::size_t size, const std::string& summary,
                          const std::string& detail, std::uint64_t timestamp_ms) {}
@@ -306,4 +316,4 @@ public:
 };
 using EventSinkPtr = std::shared_ptr<EventSink>;
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

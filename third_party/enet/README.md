@@ -1,6 +1,6 @@
 # Vendored ENet (SOCKS5-UDP patched)
 
-Adonai vendors the C ENet library here and patches its socket layer so every
+Nxrth vendors the C ENet library here and patches its socket layer so every
 datagram can be relayed through a SOCKS5 UDP ASSOCIATE proxy (the same thing
 Mori's `rusty_enet` `Socket` trait impl did).
 
@@ -8,8 +8,8 @@ Mori's `rusty_enet` `Socket` trait impl did).
 
 1. Copy the ENet source (`enet.h`, `callbacks.c`, `host.c`, `list.c`, `packet.c`,
    `peer.c`, `protocol.c`, `unix.c`, `win32.c`, and `include/`) into this folder.
-2. Add a `CMakeLists.txt` here that builds a static `enet` target. Adonai's root
-   CMake auto-detects it (`ADONAI_HAVE_ENET`) and links it.
+2. Add a `CMakeLists.txt` here that builds a static `enet` target. Nxrth's root
+   CMake auto-detects it (`NXRTH_HAVE_ENET`) and links it.
 3. Apply the SOCKS5 patch: in `win32.c`, `enet_socket_send`/`enet_socket_receive`
    consult a per-host relay config. When a relay is set:
    - **send**: prepend the 10-byte SOCKS5 UDP header (`00 00 00` RSV/FRAG, ATYP,

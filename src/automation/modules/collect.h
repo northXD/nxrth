@@ -1,4 +1,4 @@
-// Adonai — auto-pickup automation module (fleet-coordinated).
+// Nxrth — auto-pickup automation module (fleet-coordinated).
 //
 // Ported intent: Mori's per-bot auto-collect + Lua `collect(range, interval)`
 // (port spec 11 §1 collect / §6). The engine already has Bot::collect() /
@@ -15,15 +15,15 @@
 #include <string>
 #include <unordered_set>
 
-#include "bot/bot.h"          // adonai::bot::{AutomationModule, BotContext}
-#include "bot/fleet_state.h"  // adonai::bot::FleetState
+#include "bot/bot.h"          // nxrth::bot::{AutomationModule, BotContext}
+#include "bot/fleet_state.h"  // nxrth::bot::FleetState
 
-namespace adonai::automation {
+namespace nxrth::automation {
 
 // ---------------------------------------------------------------------------
 // CollectModule — coordinated auto-pickup.
 //
-// Config (AutomationConfig, read each tick via FleetState::config_snapshot):
+// Config (shared immutable AutomationConfig passed by Bot::run_automation):
 //   enabled["collect"]          = true  -> module runs (gated by run_automation)
 //   params ["collect_radius"]   = "3"   -> pickup radius in tiles, clamped 1..5
 //
@@ -32,16 +32,17 @@ namespace adonai::automation {
 // FleetState and — only if this bot now owns that claim — drives the engine's
 // Bot::collect_object_at() to grab it. Objects owned by another bot are skipped.
 // ---------------------------------------------------------------------------
-class CollectModule : public adonai::bot::AutomationModule {
+class CollectModule : public nxrth::bot::AutomationModule {
 public:
     static constexpr const char* kName = "collect";
 
     const char* name() const override { return kName; }
-    void tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) override;
+    void tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+              const nxrth::bot::AutomationConfig& config) override;
 
 private:
     std::string world_name_;                    // uppercased world we hold claims in
     std::unordered_set<std::string> my_claims_;  // "obj:" keys this bot currently owns
 };
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

@@ -1,4 +1,4 @@
-# Adonai — Architecture
+# Nxrth — Architecture
 
 A native C++ recode of the Rust "Mori" Growtopia fleet client. This document is
 the design contract the port follows. Per-module details live in
@@ -9,7 +9,7 @@ the design contract the port follows. Per-module details live in
 1. **Native C++**, no Rust, no Tokio/Axum web server.
 2. **Dear ImGui + DirectX 11** desktop UI, **Tahoma** font. No browser dashboard.
 3. **In-engine, fleet-aware automation.** Mori ran a per-bot Lua VM per automation;
-   bots were isolated and couldn't see each other. Adonai runs automation as
+   bots were isolated and couldn't see each other. Nxrth runs automation as
    native C++ modules inside the engine, all reading/writing one shared
    `FleetState`, so bots coordinate (shared targets, claim/among each other,
    fleet-wide throttle, no double-work).
@@ -17,7 +17,7 @@ the design contract the port follows. Per-module details live in
 
 ## Module map (Rust -> C++)
 
-| Rust (Mori) | C++ (Adonai) | Notes |
+| Rust (Mori) | C++ (Nxrth) | Notes |
 |---|---|---|
 | `constants.rs` | `core/constants.h` | done; values verbatim |
 | `logger.rs` | `core/logger.{h,cpp}` | done; ring buffer, UI reads it |
@@ -26,7 +26,7 @@ the design contract the port follows. Per-module details live in
 | `protocol/crypto.rs` | `protocol/crypto.{h,cpp}` | klv (MD5), crc32, hash_string |
 | `socks5.rs` | `net/socks5_udp.{h,cpp}` | SOCKS5 UDP ASSOCIATE; becomes an ENet socket patch |
 | `server_data.rs` | `net/server_data.{h,cpp}` | server_data.php fetch/parse |
-| `dashboard.rs`, `auth.rs`, `login.rs`, `har_parser.rs`, `bot/auth.rs` | `login/*` | newly login flow -> ltoken |
+| `dashboard.rs`, `login.rs`, `bot/core.rs` | `login/*` | Google OAuth checktoken + legacy GrowID login |
 | `proxy_pool.rs`, `rotation_pool.rs`, `proxy_test.rs` | `proxy/proxy_pool.{h,cpp}` | pools + DataImpulse sticky + rotation |
 | `items.rs` | `world/items.{h,cpp}` | items.dat parser |
 | `save_dat.rs`, `world/mod_impl.rs`, `inventory.rs`, `cursor.rs`, `astar.rs` | `world/*` | world model, inventory, A* |
@@ -72,7 +72,7 @@ Because every module sees `FleetState`, coordination is natural: the geiger/coll
 modules `claim()` a target before acting so two bots don't chase the same drop; a
 "spread" module assigns bots to different worlds; a "guard" module reacts to another
 bot's disconnect. This is the seam where Mori called into Lua (`script_channel` +
-`lua/runtime`) — Adonai calls native modules instead.
+`lua/runtime`) — Nxrth calls native modules instead.
 
 Initial modules (`src/automation/modules/`): `collect` (auto-pickup),
 `geiger` (farming, from `lua/geiger_stats` + core hooks), `coordinate`
@@ -81,21 +81,24 @@ Initial modules (`src/automation/modules/`): `collect` (auto-pickup),
 ## ENet + SOCKS5-UDP
 
 Mori used `rusty_enet` with a custom `Socket` trait impl that wraps every datagram
-in a SOCKS5 UDP header and relays it to the proxy. Adonai vendors the C ENet under
+in a SOCKS5 UDP header and relays it to the proxy. Nxrth vendors the C ENet under
 `third_party/enet/` and patches its socket layer (`enet_socket_send/receive`) to do
 the same when a relay is configured — one relay endpoint per host. The safe
 UDP-bind-fail fallback (bind a dead loopback socket, never connect direct → never
 leak the real IP) is preserved. Peer timeout is raised (min 12s) for flaky relays.
 
-## Login flow (unchanged from Mori)
+## Login flow
 
-`server_data.php` (growtopia1, fallback growtopia2) -> growid dashboard POST (the
-EXACT 22 upstream fields — NO fz/hash2/zf/steamToken, which 500 the 5.51 dashboard)
--> growid login/validate -> `ltoken`. `platformID=15,1,0`. The ltoken is IP-bound:
-the HTTP fetch and the ENet gateway logon must leave from the same exit IP (bypass
-session pin, or a sticky game proxy when bypass is off). Then ENet `protocol|226`
-logon -> `OnSendToServer` redirect -> subserver `protocol|211` -> `Authenticated|1`
--> `OnSpawn` -> world.
+The token path consumes either `refreshToken|rid|mac|wk` / keyed `refreshToken:`
+Google OAuth input or a provider-style keyed record containing a ready `token`,
+`rid`, `mac`, and `wk`. OAuth input is exchanged through Growtopia `checktoken`
+on the same assigned SOCKS5 proxy as ENet. Provider-ready input skips
+`checktoken`; one rotating SOCKS5 session carries its `server_data.php`, gateway,
+and redirected world traffic. The assigned game proxy is only a fallback. The first
+packet is the minimal `protocol|226`, `ltoken|...`, `platformID|2` form from the
+current Rust implementation. Redirects continue with `protocol|211`, then
+`Authenticated|1` and `OnSpawn` enter the world. Classic GrowID remains as a
+separate legacy method.
 
 ## Port order
 
@@ -110,6 +113,6 @@ logon -> `OnSendToServer` redirect -> subserver `protocol|211` -> `Authenticated
 
 ## Naming rules
 
-- `Mori`/`mori` -> `Adonai`/`adonai` everywhere (identifiers, files, log strings,
-  window title `"Adonai"`, config filenames, user-agent).
+- `Mori`/`mori` -> `Nxrth`/`nxrth` everywhere (identifiers, files, log strings,
+  window title `"Nxrth"`, config filenames, user-agent).
 - `Cloei`/`cloei` -> `North`/`north` (upstream credit, repo references).

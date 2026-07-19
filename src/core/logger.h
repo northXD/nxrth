@@ -1,10 +1,11 @@
-// Adonai — thread-safe ring-buffer logger. The ImGui console reads Snapshot().
+// Nxrth — thread-safe ring-buffer logger. The ImGui console reads Snapshot().
 #pragma once
+#include <deque>
 #include <mutex>
 #include <string>
 #include <vector>
 
-namespace adonai {
+namespace nxrth {
 
 struct LogLine {
     int bot_id;       // -1 = global / manager line
@@ -26,7 +27,7 @@ public:
 private:
     Logger() = default;
     mutable std::mutex mu_;
-    std::vector<LogLine> lines_;
+    std::deque<LogLine> lines_;
     static constexpr std::size_t kCap = 5000;
 };
 
@@ -35,4 +36,4 @@ inline void log(std::string msg, int bot_id = -1) {
     Logger::Instance().Log(std::move(msg), bot_id);
 }
 
-} // namespace adonai
+} // namespace nxrth

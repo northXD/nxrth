@@ -1,13 +1,13 @@
 # Port Spec 11 — Automation & Behavior (`lua/*`)
 
-**Adonai C++ port — single source of truth for this module.**
+**Nxrth C++ port — single source of truth for this module.**
 Ported from Mori `src/lua/{runtime.rs, webhook.rs, http.rs, geiger_stats.rs, types.rs, mod.rs}`.
 
-> **CRITICAL FRAMING FOR ADONAI.** In Mori this entire module is a **Lua scripting runtime**: each bot spawns an `mlua` VM, exposes a `bot` userdata + helper globals, and users write Lua scripts (geiger farming, harvesting, webhook reporting). **Adonai has NO Lua.** Therefore this module is NOT ported as a scripting host. Instead:
+> **CRITICAL FRAMING FOR NXRTH.** In Mori this entire module is a **Lua scripting runtime**: each bot spawns an `mlua` VM, exposes a `bot` userdata + helper globals, and users write Lua scripts (geiger farming, harvesting, webhook reporting). **Nxrth has NO Lua.** Therefore this module is NOT ported as a scripting host. Instead:
 >
 > 1. The **API surface exposed to Lua** (the `bot:*` methods, `getWorld`, `getInventory`, `http.*`, `Webhook`, `geiger_stats.*`, `rotation.*`) becomes the **native C++ engine/automation API** — plain C++ methods on the bot/engine objects.
 > 2. The **Lua library code embedded in `runtime.rs`** (the `autogeiger.*` and `rotation.*` functions loaded via `lua.load(...)`) is the actual **automation behavior**. Each of those becomes a **native C++ automation module** that drives the bot through the same underlying operations. These are the "what the automation does" blueprints. See §6.
-> 3. `geiger_stats` and `rotation_pool` and the webhook message-id map are **process-global shared state across all bots**. In Adonai these become part of the fleet-wide **`FleetState`** singleton so bots coordinate. See §5.
+> 3. `geiger_stats` and `rotation_pool` and the webhook message-id map are **process-global shared state across all bots**. In Nxrth these become part of the fleet-wide **`FleetState`** singleton so bots coordinate. See §5.
 >
 > Everything Lua-specific (VM, instruction hooks, `sleep` as a Lua function, event dispatch tables, `read`/`write`/`append` file globals) is replaced by native C++ threading and direct calls. Those Lua mechanics are still documented below because they define exact behavior (poll intervals, stop semantics, defaults) that the native modules must reproduce.
 
@@ -15,13 +15,13 @@ Ported from Mori `src/lua/{runtime.rs, webhook.rs, http.rs, geiger_stats.rs, typ
 
 ## 0. File / module map
 
-| Rust file | Responsibility | Adonai target |
+| Rust file | Responsibility | Nxrth target |
 |---|---|---|
 | `lua/mod.rs` | Module glue; re-exports `run_script_threaded` | (dropped — no script host) |
 | `lua/types.rs` | `BotProxy` (request/reply bridge) + all `Lua*` wrapper structs | Native engine handle + view structs (§1, §2) |
 | `lua/runtime.rs` | Registers the whole API; embeds the automation Lua library | Native automation API + automation modules (§6) |
-| `lua/http.rs` | Generic HTTP helper `http.get/post/put/delete/request` | `Adonai::Http` libcurl helper (§3) |
-| `lua/webhook.rs` | Discord webhook object + fleet-shared single-message updater | `Adonai::Webhook` module (§4) |
+| `lua/http.rs` | Generic HTTP helper `http.get/post/put/delete/request` | `Nxrth::Http` libcurl helper (§3) |
+| `lua/webhook.rs` | Discord webhook object + fleet-shared single-message updater | `Nxrth::Webhook` module (§4) |
 | `lua/geiger_stats.rs` | Process-global fleet geiger find counters, disk-persisted | `FleetState::geiger_stats` (§5) |
 
 `mod.rs` in full:
@@ -35,7 +35,7 @@ Only `run_script_threaded` is public. Everything else is `pub(super)` / private.
 
 ## 1. The bot ↔ automation bridge (`BotProxy`, request/reply channel)
 
-This is the **most important interface** to port: it is the complete set of operations automation can perform against a bot. In Mori it is a synchronous request/reply over `crossbeam-channel`. In Adonai it becomes **direct method calls** on the bot object (same thread as the automation, or a mutex-guarded call into the net thread) — but the *operation set and semantics* below are the contract.
+This is the **most important interface** to port: it is the complete set of operations automation can perform against a bot. In Mori it is a synchronous request/reply over `crossbeam-channel`. In Nxrth it becomes **direct method calls** on the bot object (same thread as the automation, or a mutex-guarded call into the net thread) — but the *operation set and semantics* below are the contract.
 
 ### 1.1 `BotProxy` (types.rs)
 ```rust
@@ -54,7 +54,7 @@ impl BotProxy {
 - `request()` is **fully synchronous**: send one request, block for exactly one reply. Panics (`"bot thread gone"`) if the channel is closed.
 - `state` is a **shared `RwLock<BotState>`** the automation reads directly (bypassing the channel) for hot fields (name, status, pos, gems, ping, mac, geiger_signal, console).
 
-**Adonai mapping:** `BotProxy` → a `Bot*` handle. `request(req)` → the corresponding method call, executed synchronously. `state` (RwLock) → a `std::shared_mutex`-guarded `BotState` the automation reads directly. Two distinct access paths in Mori (channel vs. direct state read) can collapse to one in Adonai (direct calls under the bot's lock), but preserve the read/write distinction for hot fields to avoid contending the command path.
+**Nxrth mapping:** `BotProxy` → a `Bot*` handle. `request(req)` → the corresponding method call, executed synchronously. `state` (RwLock) → a `std::shared_mutex`-guarded `BotState` the automation reads directly. Two distinct access paths in Mori (channel vs. direct state read) can collapse to one in Nxrth (direct calls under the bot's lock), but preserve the read/write distinction for hot fields to avoid contending the command path.
 
 ### 1.2 `ScriptRequest` / `ScriptReply` — the full operation set
 
@@ -147,13 +147,13 @@ impl BotProxy {
 
 **`ScriptReply` variants observed:** `Bool(bool)`, `U32(u32)`, `World(Option<WorldSnapshot>)`, `Inventory(Inventory)`, `Local(LocalSnapshot)`, `Path(Vec<(u32,u32)>)`, `CollectCount(usize)`. (Plus a catch-all for "ignored" replies.)
 
-> **Adonai:** implement each of these as a bot method with the exact param types and semantics. Movement helpers read live position under the state lock, compute the tile, and issue a `Walk`. `use` is deliberately identical to `wear`. `getLocal` failing is a hard error to callers; the rest degrade to defaults.
+> **Nxrth:** implement each of these as a bot method with the exact param types and semantics. Movement helpers read live position under the state lock, compute the tile, and issue a `Walk`. `use` is deliberately identical to `wear`. `getLocal` failing is a hard error to callers; the rest degrade to defaults.
 
 ---
 
 ## 2. TYPES — view/wrapper structs (types.rs + userdata field maps)
 
-These `Lua*` wrappers are thin views over engine data exposed with **exact field/method names**. In Adonai these are the **read model** the automation and UI consume. Keep the public accessor names (they are the automation's vocabulary). Field name on the left is the **exposed** name; right is the underlying source.
+These `Lua*` wrappers are thin views over engine data exposed with **exact field/method names**. In Nxrth these are the **read model** the automation and UI consume. Keep the public accessor names (they are the automation's vocabulary). Field name on the left is the **exposed** name; right is the underlying source.
 
 ### 2.1 `LuaWorld` (wraps `World` + player list + local snapshot)
 Fields: `name`=`world.tile_map.world_name`, `x`=`tile_map.width`, `y`=`tile_map.height`, `tile_count`=`tiles.len()`, `version`=`world.version`, `public`=`(world.flags & 1) != 0`, `tiles`=array of `LuaTile`, `objects`=array of `LuaNetObject`, `players`=array of `LuaPlayer`.
@@ -245,7 +245,7 @@ Fields: `x`=`s.x`, `y`=`s.y`, `type`=`s.area_type.as_str()` (string), `timestamp
 
 ---
 
-## 3. HTTP HELPER (`http.rs`) → `Adonai::Http`
+## 3. HTTP HELPER (`http.rs`) → `Nxrth::Http`
 
 Exposes `http.request(method,url,opts?)`, `http.get(url,opts?)`, `http.post`, `http.put`, `http.delete`. `get/post/put/delete` just call `request` with the method fixed.
 
@@ -267,16 +267,16 @@ Exposes `http.request(method,url,opts?)`, `http.get(url,opts?)`, `http.post`, `h
    - `body` = raw bytes read to vec (as Lua string; may be binary).
 7. Return table: `{ ok = (200..=299 contains status), status, status_text, headers, body }`.
 
-### 3.3 Adonai mapping
-- Implement as `Adonai::Http::Response Http::request(method, url, {headers, body, timeout_ms})` using **libcurl**.
-- **Must route through SOCKS5h** (per-bot proxy) exactly like the rest of the engine's HTTP — use the bot's `BotProxy`/proxy config so scripted HTTP shares the bot's proxy identity. (In Mori this generic helper used a bare `ureq::Agent` with no proxy; Adonai should bind it to the owning bot's proxy so per-bot HTTP is IP-consistent — see MEMORY: ltoken IP-binding.)
+### 3.3 Nxrth mapping
+- Implement as `Nxrth::Http::Response Http::request(method, url, {headers, body, timeout_ms})` using **libcurl**.
+- **Must route through SOCKS5h** (per-bot proxy) exactly like the rest of the engine's HTTP — use the bot's `BotProxy`/proxy config so scripted HTTP shares the bot's proxy identity. (In Mori this generic helper used a bare `ureq::Agent` with no proxy; Nxrth should bind it to the owning bot's proxy so per-bot HTTP is IP-consistent — see MEMORY: ltoken IP-binding.)
 - `ok` = status in [200,300). Non-2xx must NOT throw; return status. Default timeout **10000 ms**. Lowercase all response header keys. Preserve body as raw bytes (`std::string`), not assumed UTF-8.
 
 ---
 
-## 4. WEBHOOK (`webhook.rs`) → `Adonai::Webhook` (fleet-shared Discord reporter)
+## 4. WEBHOOK (`webhook.rs`) → `Nxrth::Webhook` (fleet-shared Discord reporter)
 
-This is the Discord reporting subsystem. Its defining feature: **the whole fleet edits ONE shared Discord message in place** (persisted across restarts) instead of every bot spamming new messages. This coordination MUST be preserved in Adonai via FleetState.
+This is the Discord reporting subsystem. Its defining feature: **the whole fleet edits ONE shared Discord message in place** (persisted across restarts) instead of every bot spamming new messages. This coordination MUST be preserved in Nxrth via FleetState.
 
 ### 4.1 Types
 
@@ -335,7 +335,7 @@ Build JSON object:
 2. Body = `payload_json()`.
 3. `run_json_request(method,url,body)`:
    - ureq agent, **global timeout 10 s**, `http_status_as_error=false`.
-   - Headers: `Content-Type: application/json`, **`User-Agent: "Mori Lua Webhook"`** → **RENAME to `"Adonai Webhook"`** (see §8).
+   - Headers: `Content-Type: application/json`, **`User-Agent: "Mori Lua Webhook"`** → **RENAME to `"Nxrth Webhook"`** (see §8).
    - Errors: `"webhook request build failed: {e}"`, `"webhook request failed: {e}"`.
 4. Read status (u16), status_text (canonical reason or `""`), body bytes → UTF-8 lossy text.
 5. `message_id` = parse body as JSON, take `.id` string field if present.
@@ -365,10 +365,10 @@ This is the crux. Steps:
 - Load: read file → `serde_json::from_str` → `HashMap<String,String>`; any failure → empty map. Loaded once lazily on first `get_or_init`.
 - Save: `create_dir_all(parent)`, write `to_string_pretty`. Errors ignored.
 
-### 4.9 Adonai mapping
-- `Adonai::Webhook` native class. Store `WebhookState` + two `WebhookEmbedState` (plain members; no per-field Arc<Mutex> needed unless the webhook object is shared across threads — it is per-automation, so a single object mutex suffices).
+### 4.9 Nxrth mapping
+- `Nxrth::Webhook` native class. Store `WebhookState` + two `WebhookEmbedState` (plain members; no per-field Arc<Mutex> needed unless the webhook object is shared across threads — it is per-automation, so a single object mutex suffices).
 - **`WEBHOOK_MESSAGE_IDS` → `FleetState::webhook_message_ids` (a `std::unordered_map<std::string,std::string>` guarded by its own `std::mutex`), persisted to `data/webhook_messages.json`.** All bots share it. Preserve the lock-only-for-read-and-write, never-across-I/O discipline.
-- HTTP via libcurl through the bot's proxy; timeout 10 s; header `User-Agent: Adonai Webhook`, `Content-Type: application/json`.
+- HTTP via libcurl through the bot's proxy; timeout 10 s; header `User-Agent: Nxrth Webhook`, `Content-Type: application/json`.
 - JSON via nlohmann/json. Extract `id` from response for message id.
 - URL helpers (`split`, `append_wait_true`, `message_url`, `message_key`) are pure string ops — port verbatim.
 - Message-id-from-value coercion: string as-is, integers → decimal, floats → `%.0f`.
@@ -399,14 +399,14 @@ struct GeigerStats {
 ### 5.3 Persistence
 - Path `current_dir()/data/geiger_stats.json`. Load: read → `serde_json::from_str` → default on any error. Save: `create_dir_all(parent)`, write `to_string_pretty`, errors ignored. `#[serde(default)]` on both fields (tolerant of missing keys).
 
-### 5.4 Adonai mapping
+### 5.4 Nxrth mapping
 - `FleetState::geiger_stats`: `std::map<std::string,uint64_t> counts` (ordered — BTreeMap) + `uint64_t total_geigers`, guarded by a `std::mutex`. Same 5 operations. `saturating_add` = clamp at `UINT64_MAX`. Persist to `data/geiger_stats.json` via nlohmann/json, pretty-printed, tolerant of missing keys. Every bot's automation records into this one shared object → the fleet webhook shows combined totals.
 
 ---
 
 ## 6. AUTOMATION MODULES — the embedded Lua library (`runtime.rs` `lua.load(...)`)
 
-**This is the behavior to reimplement natively.** In Mori these are Lua functions preloaded into every VM. In Adonai each becomes a native C++ automation routine operating on the bot + FleetState. They call the §1 operations and §2 read model. All `sleep(ms)` become interruptible native sleeps (see §7 stop semantics). Reproduce every default constant, target-tile pattern, and stall/limit heuristic exactly.
+**This is the behavior to reimplement natively.** In Mori these are Lua functions preloaded into every VM. In Nxrth each becomes a native C++ automation routine operating on the bot + FleetState. They call the §1 operations and §2 read model. All `sleep(ms)` become interruptible native sleeps (see §7 stop semantics). Reproduce every default constant, target-tile pattern, and stall/limit heuristic exactly.
 
 ### 6.1 `autogeiger` module (geiger farming enablement)
 ```
@@ -431,7 +431,7 @@ autogeiger.enable(opts):
 autogeiger.getSignal(): return getSignal()   -- bot:getSignal() → LuaSignal|nil
 ```
 **Constants:** charged geiger item id **2204**, dead geiger **2286**. These are Growtopia item ids — keep exact.
-**Adonai module `AutoGeiger`:** `bool hasGeiger(chargedId=2204, deadId=2286)`, `bool enable(GeigerOpts)`, `optional<GeigerSignal> getSignal()`. Reads inventory, wears charged geiger if present (else dead one), returns whether a geiger got equipped. This is the *entry* to a geiger hunt; the actual dig/collect loop is user-side in Mori (script drives it via getSignal + move + collect). In Adonai, build a full `GeigerHunt` module that: equips via `AutoGeiger::enable`, polls `getSignal()`, walks toward the signal `{x,y}`, digs, and on find calls `geiger_stats.record(itemName, 1)` + `add_total(1)` and pushes the fleet webhook `sendOrEdit`.
+**Nxrth module `AutoGeiger`:** `bool hasGeiger(chargedId=2204, deadId=2286)`, `bool enable(GeigerOpts)`, `optional<GeigerSignal> getSignal()`. Reads inventory, wears charged geiger if present (else dead one), returns whether a geiger got equipped. This is the *entry* to a geiger hunt; the actual dig/collect loop is user-side in Mori (script drives it via getSignal + move + collect). In Nxrth, build a full `GeigerHunt` module that: equips via `AutoGeiger::enable`, polls `getSignal()`, walks toward the signal `{x,y}`, digs, and on find calls `geiger_stats.record(itemName, 1)` + `add_total(1)` and pushes the fleet webhook `sendOrEdit`.
 
 ### 6.2 `rotation` module (farming: harvest / plant / break / buy / drop)
 ```
@@ -516,7 +516,7 @@ rotation.dropExcess(item_id, keep_count=0):
 ```
 **Key constants/patterns to preserve exactly:** harvest default limit `999999`, all default delays `200 ms`, breakBlocks initial `sleep(1000)`, place/break target column is **x-1** (three tiles: same/below/above), max **12** hit attempts per target tile, `collect(range=4.0, interval=250)` each cycle then `sleep(100)`, stall detection (`after >= before` counts as stalled; `stalled >= 8` aborts), max_cycles default `500`. `buyPack` uses **packet type 2** with body `"action|buy\nitem|<pack>"`, 3 s between buys, default pack `"world_lock"` price `2000` gems.
 
-**Adonai modules to build** (each a class driving the bot via §1 API, interruptible):
+**Nxrth modules to build** (each a class driving the bot via §1 API, interruptible):
 - `HarvestModule` — `int harvestReady(seedId, limit=999999, delayMs=200)`, `std::vector<TilePos> readyTrees(seedId)`.
 - `PlantModule` — `int plantSeeds(seedId, delayMs=200)`.
 - `BreakModule` — `int breakBlocks(blockId, x, y, BreakOpts)`.
@@ -527,17 +527,17 @@ rotation.dropExcess(item_id, keep_count=0):
 Mori defines: `Event = {variantlist=1, gameupdate=2, gamemessage=3}`, `addEvent(type,fn)`, `removeEvent(type)`, `removeEvents()`, `unlistenEvents()`, and `listenEvents(secs?)` which polls the `event_rx` channel.
 `listenEvents` behavior: loop until optional `secs` elapsed (nil = forever); break if `__listening_stop` set or global stop flag; drain all pending `BotEventRaw` via `try_recv`; dispatch by index: **1**=VariantList `f(LuaVariantList, net_id)`, **2**=GameUpdate `f(LuaGameUpdatePacket)`, **3**=GameMessage `f(text)`; then `sleep(10ms)`.
 `BotEventRaw` enum: `VariantList{vl:VariantList, net_id}`, `GameUpdate{pkt:GameUpdatePacket}`, `GameMessage{text:String}`.
-**Adonai:** replace with a native **callback registry** on the bot: `onVariantList(cb)`, `onGameUpdate(cb)`, `onGameMessage(cb)`, dispatched directly from the net thread (no polling channel needed). Automation modules register C++ callbacks instead of Lua functions. Keep the three event categories.
+**Nxrth:** replace with a native **callback registry** on the bot: `onVariantList(cb)`, `onGameUpdate(cb)`, `onGameMessage(cb)`, dispatched directly from the net thread (no polling channel needed). Automation modules register C++ callbacks instead of Lua functions. Keep the three event categories.
 
 ### 6.4 Misc runtime globals → native utilities
 - `sleep(ms)` → interruptible sleep polling stop flag every 10 ms (§7).
 - `getInfo(id|name)` → item lookup: numeric → `items.find_by_id`; string → try parse as u32 then `find_by_id`, else `find_by_name`. Returns `LuaItemInfo|nil`.
 - `getInfos()` → all `ItemInfo`.
-- `read(path)`/`write(path,content)`/`append(path,content)` → file I/O (append uses create+append open). **In Adonai, gate these behind engine-controlled paths, not arbitrary script FS access** (there is no user script).
+- `read(path)`/`write(path,content)`/`append(path,content)` → file I/O (append uses create+append open). **In Nxrth, gate these behind engine-controlled paths, not arbitrary script FS access** (there is no user script).
 - `removeColor(text)` → strip GT color codes: walk chars; on backtick `` ` `` consume it **and the next char**; else keep. (See §7 color format.)
 - `clearConsole()` → `state.console.clear()`.
 - `getUsername()` → the bot's username (captured at start).
-- Convenience globals `getBot/getLocal/getWorld/getInventory/getSignal/getPlayer/getPlayers/getTile/getTiles/getTilesSafe/getObject/getObjects/getNPC/getNPCs/hasAccess` — thin wrappers over `bot:*`; `getNPC`/`getNPCs` are stubs (`nil`/`{}`), `hasAccess` stub `false`. In Adonai these are just the bot object's methods; no separate globals needed.
+- Convenience globals `getBot/getLocal/getWorld/getInventory/getSignal/getPlayer/getPlayers/getTile/getTiles/getTilesSafe/getObject/getObjects/getNPC/getNPCs/hasAccess` — thin wrappers over `bot:*`; `getNPC`/`getNPCs` are stubs (`nil`/`{}`), `hasAccess` stub `false`. In Nxrth these are just the bot object's methods; no separate globals needed.
 
 ### 6.5 `rotation` pool API (cross-bot world coordination) → FleetState
 Registered natively in Rust (`register_rotation_pool_api`), backed by `crate::rotation_pool` (process-global). This is **fleet coordination**: bots claim/update/release worlds in a named pool so multiple bots share a rotation of farm worlds without colliding. **Port into FleetState.**
@@ -562,13 +562,13 @@ API (`rotation.*`, distinct from the farming `rotation.*` above — same table n
 - `rotation.poolSnapshot(pool_id)`: `snapshot(pool_id)` → `{pool_id, updated_at, worlds=[status...]}`.
 - `lua_rotation_status` serializes a status to a table with keys: `world, door, status, bot_id(unwrap_or 0), bot_name, ready_count, seed_count, capacity, next_ready_at, updated_at, note`.
 
-**Adonai:** `FleetState::rotationPools` — a map `pool_id → { updated_at, vector<WorldStatus> }` under a mutex. Implement `claim/update/release/snapshot` with the exact field set and the **180 s default lock TTL** (a claim expires after TTL so a dead/hung bot's world frees up). Blank-world rows skipped. This is a primary fleet-coordination mechanism: bots claim worlds from a shared pool, report ready/seed counts + next-ready timestamps, and release when done. The full semantics of `claim_world/update_world/release_world/snapshot` live in the `rotation_pool` module spec — here we bind the automation surface to them.
+**Nxrth:** `FleetState::rotationPools` — a map `pool_id → { updated_at, vector<WorldStatus> }` under a mutex. Implement `claim/update/release/snapshot` with the exact field set and the **180 s default lock TTL** (a claim expires after TTL so a dead/hung bot's world frees up). Blank-world rows skipped. This is a primary fleet-coordination mechanism: bots claim worlds from a shared pool, report ready/seed counts + next-ready timestamps, and release when done. The full semantics of `claim_world/update_world/release_world/snapshot` live in the `rotation_pool` module spec — here we bind the automation surface to them.
 
 ---
 
 ## 7. THREADING, STOP SEMANTICS & SHARED STATE
 
-### 7.1 Per-bot script thread (Mori) → per-bot automation thread (Adonai)
+### 7.1 Per-bot script thread (Mori) → per-bot automation thread (Nxrth)
 `run_script_threaded(req_tx, reply_rx, event_rx, items:Arc<ItemsDat>, state:Arc<RwLock<BotState>>, stop_flag:Arc<AtomicBool>, username, script)`:
 - Creates a fresh `Lua` VM per bot.
 - Installs an **instruction hook every 200 instructions** that returns error `"__script_stop__"` when `stop_flag` is set — cooperative cancellation.
@@ -577,16 +577,16 @@ API (`rotation.*`, distinct from the farming `rotation.*` above — same table n
 - On setup error → push `"`4[Lua setup error] {e}"` to console, return.
 - On script error → if message does **not** contain `"__script_stop__"`, push `"`4[Lua] {e}"` to console (stop errors are swallowed silently).
 
-**Adonai:** each bot runs its automation on **`std::thread`** (no Lua VM). Cooperative stop = a per-bot `std::atomic<bool> stop_flag`. All long loops/sleeps check it (equivalent to the 200-instruction hook + the sleep poll). Error logging pushes GT-colored lines into the bot console ring buffer (cap 100). Rename log prefixes (§8): `[Adonai setup error]` / `[Adonai automation error]`.
+**Nxrth:** each bot runs its automation on **`std::thread`** (no Lua VM). Cooperative stop = a per-bot `std::atomic<bool> stop_flag`. All long loops/sleeps check it (equivalent to the 200-instruction hook + the sleep poll). Error logging pushes GT-colored lines into the bot console ring buffer (cap 100). Rename log prefixes (§8): `[Nxrth setup error]` / `[Nxrth automation error]`.
 
 ### 7.2 Interruptible sleep
 `sleep(ms)`: compute deadline = now + ms; loop: if `stop_flag` set → error `"__script_stop__"`; `thread::sleep(10ms)`; until deadline. **Port exactly**: native `sleep_interruptible(ms)` polling the stop flag every 10 ms, throwing/returning a cancellation the moment stop is set.
 
 ### 7.3 Request/reply concurrency
-`BotProxy::request` blocks the automation thread until the net thread replies (one in-flight request at a time per bot). Reading hot state (`bot.name/status/pos/gems/ping/mac/geiger_signal/console`) bypasses the channel via the shared `RwLock<BotState>`. **Adonai:** the automation thread calls bot methods that lock the bot's state/command mutex; hot reads use a shared_lock. Keep command calls serialized per bot.
+`BotProxy::request` blocks the automation thread until the net thread replies (one in-flight request at a time per bot). Reading hot state (`bot.name/status/pos/gems/ping/mac/geiger_signal/console`) bypasses the channel via the shared `RwLock<BotState>`. **Nxrth:** the automation thread calls bot methods that lock the bot's state/command mutex; hot reads use a shared_lock. Keep command calls serialized per bot.
 
 ### 7.4 Fleet-wide shared state (bots aware of each other) — build into `FleetState`
-Three process-global, disk-persisted stores in Mori that **all bots share** and that make the fleet coordinate. In Adonai consolidate into a single `FleetState` singleton (each guarded appropriately):
+Three process-global, disk-persisted stores in Mori that **all bots share** and that make the fleet coordinate. In Nxrth consolidate into a single `FleetState` singleton (each guarded appropriately):
 
 | Mori global | Purpose | FleetState member | File |
 |---|---|---|---|
@@ -603,9 +603,9 @@ Three process-global, disk-persisted stores in Mori that **all bots share** and 
 
 ---
 
-## 8. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 8. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
-| Rust crate / item | Used for | Adonai C++ |
+| Rust crate / item | Used for | Nxrth C++ |
 |---|---|---|
 | `mlua` (Lua VM, `LuaUserData`, hooks, `create_function`) | entire scripting host | **REMOVED** — no Lua. API becomes native C++ methods; automation library becomes native modules (§6); instruction-hook stop → `std::atomic<bool>` checks. |
 | `ureq` (`Agent`, `Config`, `http::Request`) | HTTP for `http.*` + webhook | **libcurl** (with SOCKS5h proxy + cookies per bot). `timeout_global` → `CURLOPT_TIMEOUT_MS`; `http_status_as_error=false` → don't treat non-2xx as error (default libcurl behavior). |
@@ -621,20 +621,20 @@ Three process-global, disk-persisted stores in Mori that **all bots share** and 
 
 ---
 
-## 9. RENAME RULES (Mori→Adonai, Cloei→North) — concrete occurrences in these files
+## 9. RENAME RULES (Mori→Nxrth, Cloei→North) — concrete occurrences in these files
 
 Apply globally; concrete hits spotted in this module:
 
-| Location | Original | Adonai |
+| Location | Original | Nxrth |
 |---|---|---|
-| `webhook.rs` `run_json_request` User-Agent header | `"Mori Lua Webhook"` | `"Adonai Webhook"` (drop "Lua" — no Lua in Adonai) |
-| `runtime.rs` setup error console line | `` "`4[Lua setup error] {e}" `` | `` "`4[Adonai setup error] {e}" `` |
-| `runtime.rs` script error console line | `` "`4[Lua] {e}" `` | `` "`4[Adonai] {e}" `` or `` "`4[automation] {e}" `` |
+| `webhook.rs` `run_json_request` User-Agent header | `"Mori Lua Webhook"` | `"Nxrth Webhook"` (drop "Lua" — no Lua in Nxrth) |
+| `runtime.rs` setup error console line | `` "`4[Lua setup error] {e}" `` | `` "`4[Nxrth setup error] {e}" `` |
+| `runtime.rs` script error console line | `` "`4[Lua] {e}" `` | `` "`4[Nxrth] {e}" `` or `` "`4[automation] {e}" `` |
 | module path | `src/lua/*` | `src/automation/*` (or `engine/automation`); "lua" is not a brand but the module is no longer Lua |
-| internal stop sentinel | `"__script_stop__"` | keep as an internal cancellation signal (rename to `"__adonai_stop__"` if surfaced; it is matched by substring in error text) |
-| data files | `data/webhook_messages.json`, `data/geiger_stats.json` | keep names (not brand-specific); ensure they live under Adonai's data dir |
+| internal stop sentinel | `"__script_stop__"` | keep as an internal cancellation signal (rename to `"__nxrth_stop__"` if surfaced; it is matched by substring in error text) |
+| data files | `data/webhook_messages.json`, `data/geiger_stats.json` | keep names (not brand-specific); ensure they live under Nxrth's data dir |
 
-**No `Cloei`/`cloei` occurrences** appear in these six files. Still, apply the rule project-wide: any `Cloei`/`cloei` → `North`/`north` in identifiers, paths, log lines, window titles, user-agents, config filenames. Likewise any other `Mori`/`mori` string (window titles, config filenames, user-agents) elsewhere → `Adonai`/`adonai`.
+**No `Cloei`/`cloei` occurrences** appear in these six files. Still, apply the rule project-wide: any `Cloei`/`cloei` → `North`/`north` in identifiers, paths, log lines, window titles, user-agents, config filenames. Likewise any other `Mori`/`mori` string (window titles, config filenames, user-agents) elsewhere → `Nxrth`/`nxrth`.
 
 > Note: the Lua-facing identifier names themselves (`bot`, `getWorld`, `autogeiger`, `rotation`, `geiger_stats`, `Webhook`, `http`) are the automation's public vocabulary, not brand names — keep them as the native C++ method/module names for continuity (they are not "Mori"/"Cloei").
 
@@ -646,8 +646,8 @@ Native modules operating on the bot + `FleetState`:
 
 1. **`Bot` engine API** — every §1.2 operation as a synchronous method (movement, place/hit/wrench, warp/say/enter, inventory drop/trash/wear, getWorld/getInventory/getLocal/getSignal, collect/findPath/getPath, delays & auto_collect getters/setters). Hot-state reads under shared_lock.
 2. **View structs** (§2): `World, Tile, InventoryItem, WorldObject, Player, ItemInfo, GameUpdatePacket, Variant/VariantList, GeigerSignal` with the exact exposed accessor names.
-3. **`Adonai::Http`** (§3) — libcurl, proxy-bound, 10 s default, lowercased headers, ok=2xx, raw body.
-4. **`Adonai::Webhook`** (§4) — payload builder (content/username/avatar + 2 embeds), send/edit/sendOrEdit, fleet single-message algorithm via `FleetState::webhook_message_ids`, disk persistence, User-Agent `Adonai Webhook`.
+3. **`Nxrth::Http`** (§3) — libcurl, proxy-bound, 10 s default, lowercased headers, ok=2xx, raw body.
+4. **`Nxrth::Webhook`** (§4) — payload builder (content/username/avatar + 2 embeds), send/edit/sendOrEdit, fleet single-message algorithm via `FleetState::webhook_message_ids`, disk persistence, User-Agent `Nxrth Webhook`.
 5. **`FleetState::geiger_stats`** (§5) — record/add_total/count/total/reset, ordered map, saturating total, `data/geiger_stats.json`.
 6. **`FleetState::rotation_pools`** (§6.5) — claim/update/release/snapshot, 180 s TTL locks, blank-world skip.
 7. **Automation routines** (§6.1–6.2): `AutoGeiger`(enable/hasGeiger/getSignal) + full `GeigerHunt` loop, `Harvest`, `Plant`, `Break`, `Buy`, `InventoryTrim` — each interruptible via the per-bot stop flag, reproducing every default constant and heuristic exactly.

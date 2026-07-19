@@ -1,4 +1,4 @@
-// Adonai — world map model + SendMapData byte parser implementation.
+// Nxrth — world map model + SendMapData byte parser implementation.
 // Byte-exact port of Mori/world/mod_impl.rs, world/constants.rs.
 #include "world/world.h"
 
@@ -10,7 +10,7 @@
 
 #include "core/logger.h"
 
-namespace adonai::world {
+namespace nxrth::world {
 
 // --- CBOR tile-id set (world/constants.rs) ----------------------------------
 namespace {
@@ -44,6 +44,18 @@ void read_array(Cursor& cur, std::array<std::uint8_t, N>& out) {
     std::vector<std::uint8_t> b = cur.bytes(N);
     std::copy(b.begin(), b.end(), out.begin());
 }
+
+// Thrown by parse_tile_extra when the 1-byte kind discriminant is a block-extra
+// type we don't have a byte layout for. GT tile extra data is NOT length-prefixed,
+// so once we hit an unknown kind we can't know how many bytes it occupies and the
+// per-tile stream is desynced from here on. WorldTileMap::parse catches this to
+// stop cleanly (keeping the tiles read so far) instead of parsing garbage.
+struct UnknownTileKind : std::runtime_error {
+    UnknownTileKind(std::uint8_t k, std::uint16_t fg)
+        : std::runtime_error("unsupported tile extra kind"), kind(k), fg_item_id(fg) {}
+    std::uint8_t kind;
+    std::uint16_t fg_item_id;
+};
 
 // §6.5 — extra-data dispatch on the 1-byte kind discriminant.
 TileType parse_tile_extra(Cursor& cur, std::uint8_t kind, std::uint16_t fg_item_id) {
@@ -518,9 +530,8 @@ TileType parse_tile_extra(Cursor& cur, std::uint8_t kind, std::uint16_t fg_item_
             return t;
         }
         default:
-            adonai::log("[world] WARNING: unknown TileExtraData kind " + hex_str(kind) +
-                        " at fg_item=" + std::to_string(fg_item_id));
-            return Unknown{kind};
+            // No known byte layout — signal the caller to stop cleanly (see above).
+            throw UnknownTileKind{kind, fg_item_id};
     }
 }
 
@@ -577,8 +588,12 @@ Tile Tile::parse(Cursor& cur, std::uint16_t /*map_version*/, std::uint32_t x, st
     return t;
 }
 
-// §6.2 — tile map.
-WorldTileMap WorldTileMap::parse(Cursor& cur, std::uint16_t map_version) {
+// §6.2 — tile map. `out_truncated` is set true if parsing stopped early on an
+// unsupported tile-extra block (the tail is padded with empty tiles so the map
+// stays the right dimensions and the caller must NOT read the trailer/objects,
+// since the byte stream is desynced from that tile onward).
+WorldTileMap WorldTileMap::parse(Cursor& cur, std::uint16_t map_version, bool& out_truncated) {
+    out_truncated = false;
     WorldTileMap map;
     map.world_name = cur.plain_string();  // u16 name_len + bytes
     map.width = cur.u32();
@@ -592,18 +607,40 @@ WorldTileMap WorldTileMap::parse(Cursor& cur, std::uint16_t map_version) {
         throw std::runtime_error("world width is 0 with non-zero tile_count");
     }
     map.tiles.reserve(tile_count);
-    for (std::uint32_t idx = 0; idx < tile_count; ++idx) {
+    std::uint32_t idx = 0;
+    for (; idx < tile_count; ++idx) {
         std::uint32_t x = idx % map.width;
         std::uint32_t y = idx / map.width;
         std::size_t pos_before = cur.pos();
         try {
             map.tiles.push_back(Tile::parse(cur, map_version, x, y));
+        } catch (const UnknownTileKind& e) {
+            // Recoverable: a rare/new block type with no known layout. Keep every
+            // tile up to here; the rest of the stream can't be trusted. Log enough
+            // to add support later (kind + fg item + position).
+            nxrth::log("[world] unsupported tile-extra kind " + hex_str(e.kind) + " (fg_item=" +
+                        std::to_string(e.fg_item_id) + ") at tile " + std::to_string(idx) + " (" +
+                        std::to_string(x) + "," + std::to_string(y) + "); keeping " +
+                        std::to_string(idx) + " tiles, padding the rest as empty.");
+            out_truncated = true;
+            break;
         } catch (const std::exception& e) {
-            adonai::log("[world] tile " + std::to_string(idx) + " (" + std::to_string(x) + "," +
+            nxrth::log("[world] tile " + std::to_string(idx) + " (" + std::to_string(x) + "," +
                         std::to_string(y) + ") failed at pos " + std::to_string(pos_before) + ": " +
                         e.what());
             throw;
         }
+    }
+    if (out_truncated) {
+        // Pad the unparsed tail as empty tiles so tile_index()/collision grids stay
+        // the correct dimensions (width*height) — the tail just reads as air.
+        for (; idx < tile_count; ++idx) {
+            Tile t;
+            t.x = idx % map.width;
+            t.y = idx / map.width;
+            map.tiles.push_back(std::move(t));
+        }
+        return map;  // caller skips the trailer + objects (stream is desynced)
     }
     cur.skip(12);  // trailer after tile array
     return map;
@@ -618,7 +655,16 @@ World World::parse(const std::uint8_t* data, std::size_t len) {
         throw std::runtime_error("map version " + hex_str(w.version) + " < minimum 0x19");
     }
     w.flags = cur.u32();
-    w.tile_map = WorldTileMap::parse(cur, w.version);
+    bool truncated = false;
+    w.tile_map = WorldTileMap::parse(cur, w.version, truncated);
+    if (truncated) {
+        // An unsupported tile block desynced the stream; the tile map is kept
+        // (tail padded as air) but objects/weather can't be read. Return the
+        // partial world so the bot still has a usable map instead of nothing.
+        nxrth::log("[world] partial map returned (objects/weather skipped after an "
+                    "unsupported tile block).");
+        return w;
+    }
     auto [objects, last_dropped_uid] = parse_world_objects(cur);
     w.objects = std::move(objects);
     w.base_weather = cur.u16();
@@ -632,7 +678,7 @@ std::optional<World> World::try_parse(const std::uint8_t* data, std::size_t len)
     try {
         return World::parse(data, len);
     } catch (const std::exception& e) {
-        adonai::log(std::string("[world] World parse error: ") + e.what());
+        nxrth::log(std::string("[world] World parse error: ") + e.what());
         return std::nullopt;
     }
 }
@@ -716,4 +762,4 @@ bool world_has_access(const World& world, std::uint32_t user_id) {
     return false;
 }
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

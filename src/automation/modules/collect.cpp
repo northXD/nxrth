@@ -1,4 +1,4 @@
-// Adonai — CollectModule: fleet-coordinated auto-pickup (see collect.h).
+// Nxrth — CollectModule: fleet-coordinated auto-pickup (see collect.h).
 #include "automation/modules/collect.h"
 
 #include <algorithm>
@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "automation/modules/coordinate.h"  // obj_key / claim / release / to_upper
-#include "world/world.h"                     // adonai::world::World / WorldObject / TILE_SIZE
+#include "world/world.h"                     // nxrth::world::World / WorldObject / TILE_SIZE
 
-namespace adonai::automation {
+namespace nxrth::automation {
 
 namespace {
 
@@ -23,7 +23,8 @@ std::uint32_t parse_radius(const std::string& s) {
 
 }  // namespace
 
-void CollectModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) {
+void CollectModule::tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+                         const nxrth::bot::AutomationConfig& config) {
     const std::uint32_t id = self.bot_id();
     const auto& w = self.world();
 
@@ -63,8 +64,8 @@ void CollectModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState&
     const auto& inv = self.inventory();
     if (inv.size != 0 && inv.item_count >= inv.size) return;
 
-    const std::uint32_t radius = parse_radius(fleet.config_snapshot().param("collect_radius"));
-    const float r_px = static_cast<float>(radius) * adonai::world::TILE_SIZE;
+    const std::uint32_t radius = parse_radius(config.param("collect_radius"));
+    const float r_px = static_cast<float>(radius) * nxrth::world::TILE_SIZE;
     const float px = self.pos_x();
     const float py = self.pos_y();
 
@@ -85,7 +86,7 @@ void CollectModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState&
               [](const Near& a, const Near& b) { return a.ring < b.ring; });
 
     const std::size_t limit =
-        std::min<std::size_t>(nearby.size(), adonai::bot::COLLECT_MAX_PER_TICK);
+        std::min<std::size_t>(nearby.size(), nxrth::bot::COLLECT_MAX_PER_TICK);
     for (std::size_t i = 0; i < limit; ++i) {
         const std::string key = obj_key(world, nearby[i].uid);
         const auto owner = fleet.owner(key);
@@ -96,4 +97,4 @@ void CollectModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState&
     }
 }
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

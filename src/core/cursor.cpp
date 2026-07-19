@@ -3,7 +3,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace adonai {
+namespace nxrth {
 
 void Cursor::need(std::size_t n) const {
     if (pos_ + n > len_) {
@@ -88,4 +88,4 @@ std::string Cursor::xor_string(std::string_view key, std::size_t key_start) {
     return out;
 }
 
-}  // namespace adonai
+}  // namespace nxrth

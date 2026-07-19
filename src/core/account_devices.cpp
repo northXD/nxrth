@@ -1,4 +1,4 @@
-// Adonai — per-account device identity store implementation.
+// Nxrth — per-account device identity store implementation.
 // Ported from Mori/account_devices.rs (§6 of docs/port-specs/02-constants-data.md).
 #include "core/account_devices.h"
 
@@ -21,7 +21,7 @@
 namespace fs = std::filesystem;
 using nlohmann::json;
 
-namespace adonai::account_devices {
+namespace nxrth::account_devices {
 namespace {
 
 // --- process-global store lock (Meyers singleton, mirrors Rust STORE_LOCK) ----
@@ -308,4 +308,4 @@ bool upsert_from_login_token(const std::string& username,
     return true;
 }
 
-}  // namespace adonai::account_devices
+}  // namespace nxrth::account_devices

@@ -1,4 +1,4 @@
-// Adonai — GrowID login orchestration implementation (see login.h / §4).
+// Nxrth — GrowID login orchestration implementation (see login.h / §4).
 #include "login/login.h"
 
 #include <algorithm>
@@ -13,30 +13,34 @@
 
 #include <nlohmann/json.hpp>
 
-#include "bot/gates.h"  // adonai::bot fleet gates — the ONE authoritative cursor
+#include "bot/gates.h"  // nxrth::bot fleet gates — the ONE authoritative cursor
 #include "core/account_devices.h"
 #include "core/constants.h"
 #include "login/dashboard.h"
 #include "net/http_client.h"
 #include "protocol/crypto.h"
 
-namespace adonai::login {
+namespace nxrth::login {
 namespace {
 
-namespace consts = adonai::constants;
-using adonai::net::HttpClient;
-using adonai::net::HttpHeader;
-using adonai::net::HttpRequest;
-using adonai::net::HttpResponse;
-using adonai::net::LoginInfo;
-using adonai::net::Socks5Config;
-using adonai::proxy::BypassLoginSession;
-using adonai::proxy::RotatingLoginProxy;
+namespace consts = nxrth::constants;
+using nxrth::net::HttpClient;
+using nxrth::net::HttpHeader;
+using nxrth::net::HttpRequest;
+using nxrth::net::HttpResponse;
+using nxrth::net::LoginInfo;
+using nxrth::net::Socks5Config;
+using nxrth::proxy::BypassLoginSession;
+using nxrth::proxy::RotatingLoginProxy;
 
 // Wire-fixed UAs / URLs (do NOT rename — sent to Growtopia).
 constexpr const char* kMacUA =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+constexpr const char* kUbiUA = "UbiServices_SDK_2022.Release.9_PC64_ansi_static";
 constexpr const char* kValidateUrl = "https://login.growtopiagame.com/player/growid/login/validate";
+constexpr const char* kCheckTokenUrl =
+    "https://login.growtopiagame.com/player/growid/checktoken?valKey="
+    "40db4045f2d8c572efe8c4a060605726";
 constexpr const char* kLoginOrigin = "https://login.growtopiagame.com";
 
 std::string trim(const std::string& s) {
@@ -93,10 +97,10 @@ bool swap_quarantined_game_proxy(std::optional<Socks5Config>& current,
                                  std::optional<std::string>& url, std::atomic<bool>& stop,
                                  const LogFn& log) {
     const std::string key = current->host + ":" + std::to_string(current->port);
-    adonai::proxy::quarantine_proxy(key);
+    nxrth::proxy::quarantine_proxy(key);
     log("[Bot] game proxy " + key +
         " returned 403 - quarantined fleet-wide; no bot will log in through it.");
-    auto repl = adonai::proxy::next_game_proxy(&*current);
+    auto repl = nxrth::proxy::next_game_proxy(&*current);
     if (repl) {
         current = repl;
         url = socks5_config_to_url(*repl);
@@ -132,6 +136,23 @@ std::string token_shape(const std::string& t) {
 
 bool is_http_403_text(const std::string& msg) {
     return ci_contains(msg, "403") || ci_contains(msg, "forbidden");
+}
+
+// Secret-safe classification of an HTTP body: never returns any body content, only
+// a coarse shape so a 2xx-non-JSON checktoken response is diagnosable from logs.
+std::string classify_body(const std::string& content_type, const std::string& body) {
+    std::string b = trim(body);
+    if (b.empty()) return "empty";
+    char c = b.front();
+    if (c == '{' || c == '[') return "json";
+    if (c == '<') return "html";
+    if (ci_contains(content_type, "json")) return "json?";
+    if (ci_contains(content_type, "html")) return "html";
+    // gzip magic (0x1f 0x8b) — a compressed body we did not decode.
+    if (b.size() >= 2 && static_cast<unsigned char>(b[0]) == 0x1f &&
+        static_cast<unsigned char>(b[1]) == 0x8b)
+        return "gzip";
+    return "other";
 }
 
 // Extract the .text-danger.text-danger-wrapper element text from an HTML error page.
@@ -186,14 +207,14 @@ constexpr std::chrono::milliseconds kHttpLoginStagger{2500};
 constexpr std::chrono::milliseconds kGateMaxAhead{300000};
 
 // --- server_data candidate fetch (§4.5) --------------------------------------
-std::optional<adonai::net::ServerData> fetch_server_data_candidate(
+std::optional<nxrth::net::ServerData> fetch_server_data_candidate(
     const LoginInfo& login_info, const std::string& proxy_label,
     const std::optional<std::string>& proxy_url, const std::string& login_mode,
     const std::string& failure_label, const LogFn& log, bool* out_403 = nullptr) {
     for (bool alternate : {false, true}) {
         log("[Bot] fetching server_data (alternate=" + std::string(alternate ? "true" : "false") +
             ", login_mode=" + login_mode + ", http_proxy=" + proxy_label + ")...");
-        auto res = adonai::net::get_server_data_proxied(alternate, login_info, proxy_url);
+        auto res = nxrth::net::get_server_data_proxied(alternate, login_info, proxy_url);
         if (res.ok()) return res.data;
         log("[Bot] " + failure_label + ": server_data failed via " + proxy_label + ": " +
             res.error);
@@ -233,7 +254,7 @@ ProxyPlan login_attempt_proxies(const std::optional<RotatingLoginProxy>& login_p
     // No proxy assigned. A direct login sends the dashboard/token POST through the
     // REAL IP; at scale that trips Growtopia's per-IP 24h login ban (the "leak").
     // Refuse it unless the operator explicitly opts in.
-    if (std::getenv("ADONAI_ALLOW_DIRECT_LOGIN"))
+    if (std::getenv("NXRTH_ALLOW_DIRECT_LOGIN"))
         plan.candidates.push_back({"direct", std::nullopt});
     else
         plan.refused_direct = true;
@@ -288,6 +309,13 @@ LoginError classify_login_error(const std::string& text) {
     if (low.find("exhausted") != std::string::npos) return {LoginErrorKind::Exhausted, text};
     if (low.find("mismatched") != std::string::npos) return {LoginErrorKind::WrongCredentials, text};
     return {LoginErrorKind::Other, text};
+}
+
+std::string token_fingerprint(const std::string& secret) {
+    const std::string s = trim(secret);
+    if (s.empty()) return "len=0";
+    return "len=" + std::to_string(s.size()) +
+           " sha=" + nxrth::protocol::sha256_hex(s).substr(0, 12);
 }
 
 std::optional<std::string> extract_csrf_token(const std::string& html) {
@@ -375,6 +403,71 @@ LoginTokenResult get_legacy_token_proxied(const std::string& url, const std::str
                                      "Login failed: unexpected response from server"}};
 }
 
+LoginTokenResult check_token(const std::string& refresh_token,
+                             const std::string& client_data,
+                             const std::optional<std::string>& proxy_url) {
+    const std::string token = trim(refresh_token);
+    if (token.empty()) {
+        return {std::nullopt, LoginError{LoginErrorKind::Other, "OAuth refresh token is empty"}};
+    }
+
+    HttpClient client;
+    HttpRequest request;
+    request.user_agent = kUbiUA;
+    request.timeout_secs = 20;
+    request.headers = {{"Content-Type", "application/x-www-form-urlencoded"}};
+    if (proxy_url) request.proxy = *proxy_url;
+
+    const std::string body = "refreshToken=" + form_encode(token) +
+                             "&clientData=" + form_encode(client_data);
+    HttpResponse response = client.Post(kCheckTokenUrl, body, request);
+    if (!response.ok()) {
+        return {std::nullopt, LoginError{LoginErrorKind::Other,
+                                         "checktoken transport failed: " + response.error}};
+    }
+    if (response.status < 200 || response.status >= 300) {
+        return {std::nullopt,
+                LoginError{LoginErrorKind::Other,
+                           "checktoken returned HTTP " + std::to_string(response.status)}};
+    }
+
+    const auto parsed = nlohmann::json::parse(response.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        const std::string ctype = response.header("Content-Type").value_or("");
+        return {std::nullopt,
+                LoginError{LoginErrorKind::Other,
+                           "checktoken returned non-JSON (HTTP " +
+                               std::to_string(response.status) + ", content-type=" +
+                               (ctype.empty() ? "?" : ctype) + ", body=" +
+                               classify_body(ctype, response.body) + ", " +
+                               std::to_string(response.body.size()) + " bytes)"}};
+    }
+    if (parsed.value("status", std::string{}) != "success") {
+        std::string message;
+        for (const char* key : {"message", "error", "status"}) {
+            if (parsed.contains(key) && parsed[key].is_string()) {
+                message = parsed[key].get<std::string>();
+                if (!message.empty()) break;
+            }
+        }
+        if (message.empty()) message = "request rejected";
+        return {std::nullopt,
+                LoginError{LoginErrorKind::Other, "checktoken failed: " + message}};
+    }
+    if (!parsed.contains("token") || !parsed["token"].is_string()) {
+        return {std::nullopt,
+                LoginError{LoginErrorKind::Other,
+                           "checktoken succeeded but response token was missing"}};
+    }
+    std::string checked = trim(parsed["token"].get<std::string>());
+    if (checked.empty()) {
+        return {std::nullopt,
+                LoginError{LoginErrorKind::Other,
+                           "checktoken succeeded but response token was empty"}};
+    }
+    return {std::move(checked), std::nullopt};
+}
+
 // --- identity ---------------------------------------------------------------
 LoginIdentity default_login_identity() {
     LoginIdentity id;
@@ -400,15 +493,15 @@ LoginIdentity default_login_identity() {
     } catch (...) {
         hv = 0;
     }
-    id.klv = adonai::protocol::compute_klv(consts::GAME_VER, "226", consts::DEFAULT_RID, hv);
+    id.klv = nxrth::protocol::compute_klv(consts::GAME_VER, "226", consts::DEFAULT_RID, hv);
     return id;
 }
 
 LoginIdentity apply_account_device_identity(const std::string& username, LoginIdentity identity,
                                             const LogFn& log) {
-    std::optional<adonai::account_devices::AccountDevice> device;
+    std::optional<nxrth::account_devices::AccountDevice> device;
     try {
-        device = adonai::account_devices::get_or_create(username);
+        device = nxrth::account_devices::get_or_create(username);
     } catch (const std::exception& e) {
         log(std::string("[Bot] account device identity unavailable: ") + e.what());
         return identity;
@@ -434,7 +527,7 @@ LoginIdentity apply_account_device_identity(const std::string& username, LoginId
         }
     }
     std::string klv =
-        adonai::protocol::compute_klv(consts::GAME_VER, "226", device->rid, hash_val);
+        nxrth::protocol::compute_klv(consts::GAME_VER, "226", device->rid, hash_val);
 
     identity.rid = device->rid;
     identity.mac = device->mac;
@@ -453,7 +546,7 @@ LoginIdentity apply_account_device_identity(const std::string& username, LoginId
     return identity;
 }
 
-std::optional<LoginIdentity> newly_login_identity(const std::string& username, const LogFn& log) {
+std::optional<LoginIdentity> login_identity(const std::string& username, const LogFn& log) {
     return apply_account_device_identity(username, default_login_identity(), log);
 }
 
@@ -462,136 +555,8 @@ std::optional<LoginIdentity> newly_login_identity(const std::string& username, c
 // fleet (login HTTP fetches AND bot reconnect re-logins) shares ONE cursor per
 // phase. Two separate gate instances would split the pacing and defeat the
 // fleet-wide throttle (the local FleetGate machinery above is now unused).
-void pace_dashboard() { adonai::bot::pace_dashboard(); }
-void pace_http_login() { adonai::bot::pace_http_login(); }
-
-// --- newly orchestration (§4.5 fetch_newly_credentials) ----------------------
-std::optional<Credentials> fetch_newly_credentials(
-    const std::string& username, const std::string& password,
-    const std::optional<Socks5Config>& proxy,
-    const std::optional<RotatingLoginProxy>& login_proxy, std::atomic<bool>& stop,
-    const LogFn& log) {
-    std::optional<Socks5Config> current_game_proxy = proxy;  // swapped on a 403
-    std::optional<std::string> game_proxy_url;
-    if (current_game_proxy) game_proxy_url = socks5_config_to_url(*current_game_proxy);
-
-    if (login_proxy) {
-        log("[Bot] rotating login proxy enabled for newly HTTP login");
-        log("[Bot] newly HTTP login will not fall back to assigned game proxy");
-    }
-
-    LoginInfo login_info;
-    login_info.protocol = consts::PROTOCOL;
-    login_info.game_version = std::string(consts::GAME_VER);
-
-    for (;;) {
-        if (stop.load()) {
-            log("[Bot] login aborted — bot was stopped");
-            return std::nullopt;
-        }
-
-        ProxyPlan plan = login_attempt_proxies(login_proxy, game_proxy_url);
-        if (plan.refused_direct) {
-            log("[Bot] no proxy assigned - refusing DIRECT login to protect the real IP; "
-                "assign a game/bypass proxy (or set ADONAI_ALLOW_DIRECT_LOGIN=1). Stopping bot.");
-            stop.store(true);
-            return std::nullopt;
-        }
-        if (login_proxy && !plan.bypass_session) {
-            log("[Bot] newly fetch: bypass login proxy is not SOCKS5-UDP capable — cannot pin "
-                "logon IP; retrying in 5s");
-        }
-        std::optional<Socks5Config> bypass_enet;
-        if (plan.bypass_session) bypass_enet = plan.bypass_session->enet;
-
-        bool rotate_bypass = false;  // a 403 from the bypass proxy -> re-pick now
-        bool rotate_game = false;    // a 403 from the game proxy -> quarantine + swap
-        // A 403 means THIS exit IP is login-blocked. React by proxy kind: bypass ->
-        // rotate to the next bypass exit; game -> quarantine it + pull a replacement.
-        auto react_403 = [&]() -> bool {
-            if (login_proxy) { rotate_bypass = true; return true; }
-            if (current_game_proxy) { rotate_game = true; return true; }
-            return false;
-        };
-        for (const auto& [proxy_label, proxy_url] : plan.candidates) {
-            if (stop.load()) return std::nullopt;
-
-            bool got_403 = false;
-            auto server_data = fetch_server_data_candidate(login_info, proxy_label, proxy_url,
-                                                           "newly", "newly fetch", log, &got_403);
-            if (!server_data) {
-                if (got_403 && react_403()) break;
-                continue;
-            }
-
-            if (!valid_server_addr(server_data->server, server_data->port)) {
-                log("[Bot] fetch: invalid server address '" + server_data->server + ":" +
-                    std::to_string(server_data->port) + "' via " + proxy_label +
-                    " (parse failed) — skipping candidate");
-                continue;
-            }
-
-            auto identity = newly_login_identity(username, log);
-
-            pace_dashboard();  // fleet-wide gate before the dashboard POST.
-
-            // identity=None on purpose — canonical 22-field POST (§4.2).
-            auto dashboard = get_newly_dashboard_proxied(server_data->loginurl, login_info,
-                                                         server_data->meta, proxy_url, std::nullopt);
-            if (!dashboard.ok()) {
-                if (is_http_403_text(dashboard.error) && react_403()) break;
-                log("[Bot] newly fetch: dashboard failed via " + proxy_label + ": " +
-                    dashboard.error + " — retrying");
-                continue;
-            }
-            if (!dashboard.links.growtopia) {
-                log("[Bot] newly fetch: no Growtopia URL via " + proxy_label);
-                continue;
-            }
-
-            auto tok = get_legacy_token_proxied(*dashboard.links.growtopia, username, password,
-                                                proxy_url);
-            if (!tok.ok()) {
-                const LoginError& e = *tok.error;
-                log("[Bot] newly fetch: login failed via " + proxy_label + ": " + e.display());
-                if (e.kind == LoginErrorKind::Exhausted ||
-                    e.kind == LoginErrorKind::WrongCredentials) {
-                    handle_terminal_login_error(e, stop, log);
-                    continue;
-                }
-                if (is_http_403_text(e.display()) && react_403()) break;
-                continue;
-            }
-
-            std::string ltoken = *tok.token;
-            log("[Bot] newly using raw dashboard login token via " + proxy_label);
-            log("[Bot] Got token: " + ltoken);
-            if (plan.bypass_session) log_pin(*plan.bypass_session, log);
-
-            Credentials cred;
-            cred.ltoken = std::move(ltoken);
-            cred.meta = server_data->meta;
-            cred.server = server_data->server;
-            cred.port = server_data->port;
-            cred.identity = std::move(identity);
-            cred.bypass_enet = bypass_enet;
-            return cred;
-        }
-
-        if (rotate_bypass) {
-            log("[Bot] bypass proxy hit 403 — rotating to the next bypass proxy now");
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            continue;  // outer loop re-picks (rotates) via login_session()
-        }
-        if (rotate_game && current_game_proxy) {
-            if (!swap_quarantined_game_proxy(current_game_proxy, game_proxy_url, stop, log))
-                return std::nullopt;  // no clean replacement -> bot stopped (never direct)
-            continue;
-        }
-        log("[Bot] newly fetch: all HTTP login proxy candidates failed - retrying in 5s");
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-    }
-}
+void pace_dashboard() { nxrth::bot::pace_dashboard(); }
+void pace_http_login() { nxrth::bot::pace_http_login(); }
 
 // --- legacy orchestration (§4.5 fetch_credentials_with_dashboard, Legacy) ----
 // HAR-based fallbacks (try_har_growid_login / checktoken clientData) require the
@@ -619,7 +584,7 @@ std::optional<Credentials> fetch_credentials(
         ProxyPlan plan = login_attempt_proxies(login_proxy, game_proxy_url);
         if (plan.refused_direct) {
             log("[Bot] no proxy assigned - refusing DIRECT login to protect the real IP; "
-                "assign a game/bypass proxy (or set ADONAI_ALLOW_DIRECT_LOGIN=1). Stopping bot.");
+                "assign a game/bypass proxy (or set NXRTH_ALLOW_DIRECT_LOGIN=1). Stopping bot.");
             stop.store(true);
             return std::nullopt;
         }
@@ -699,7 +664,7 @@ std::optional<Credentials> fetch_credentials(
 
             log("[Bot] using dashboard login token directly via " + proxy_label +
                 " (checktoken skipped for ENet login)");
-            log("[Bot] Got token: " + ltoken);
+            log("[Bot] Got token: " + token_fingerprint(ltoken));
             if (plan.bypass_session) log_pin(*plan.bypass_session, log);
 
             Credentials cred;
@@ -707,7 +672,7 @@ std::optional<Credentials> fetch_credentials(
             cred.meta = server_data->meta;
             cred.server = server_data->server;
             cred.port = server_data->port;
-            cred.identity = newly_login_identity(username, log);  // per-account ENet identity
+            cred.identity = login_identity(username, log);  // per-account ENet identity
             cred.bypass_enet = bypass_enet;
             return cred;
         }
@@ -727,4 +692,4 @@ std::optional<Credentials> fetch_credentials(
     }
 }
 
-}  // namespace adonai::login
+}  // namespace nxrth::login

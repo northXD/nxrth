@@ -9,7 +9,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <ws2tcpip.h>
-#include "adonai_socks5.h"
+#include "nxrth_socks5.h"
 
 static enet_uint32 timeBase = 0;
 
@@ -342,12 +342,12 @@ enet_socket_send (ENetSocket socket,
 
     /* SOCKS5 relay: prepend the UDP request header targeting `address` and send
        the datagram to the relay instead of the peer. */
-    if (address != NULL && adonai_socks5_relay_for ((intptr_t) socket, & relayAddr, & relayLen))
+    if (address != NULL && nxrth_socks5_relay_for ((intptr_t) socket, & relayAddr, & relayLen))
     {
         unsigned char socksHdr [32];
         WSABUF wb [ENET_BUFFER_MAXIMUM + 1];
         size_t bi;
-        int hdrLen = adonai_socks5_build_header ((struct sockaddr *) & sin, socksHdr,
+        int hdrLen = nxrth_socks5_build_header ((struct sockaddr *) & sin, socksHdr,
                                                  (int) sizeof (socksHdr));
         if (hdrLen < 0)
           return -1;
@@ -403,7 +403,7 @@ enet_socket_receive (ENetSocket socket,
 
     /* SOCKS5 relay: receive the wrapped datagram, strip the SOCKS5 UDP header,
        and report the real source + payload to ENet. */
-    if (adonai_socks5_relay_for ((intptr_t) socket, & relayAddr, & relayLen))
+    if (nxrth_socks5_relay_for ((intptr_t) socket, & relayAddr, & relayLen))
     {
         enet_uint8 socksBuf [ENET_PROTOCOL_MAXIMUM_MTU + 64];
         struct sockaddr_storage from;
@@ -427,7 +427,7 @@ enet_socket_receive (ENetSocket socket,
               return -1;
             }
         }
-        payloadLen = adonai_socks5_parse_header (socksBuf, n, & src, & srcLen, & payloadOff);
+        payloadLen = nxrth_socks5_parse_header (socksBuf, n, & src, & srcLen, & payloadOff);
         if (payloadLen < 0)
           return 0;   /* not a valid SOCKS5 UDP datagram — drop */
         for (bi = 0; bi < bufferCount && copied < (size_t) payloadLen; ++ bi)

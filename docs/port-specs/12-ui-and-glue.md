@@ -1,9 +1,9 @@
-# Adonai Port Spec — Module 12: UI & Glue
+# Nxrth Port Spec — Module 12: UI & Glue
 
 **Source Rust files covered:** `web.rs`, `main.rs`, `logger.rs`, `bot/mod.rs`, `lua/mod.rs`
 (Mori-2.0.0 `src/`)
 
-**Adonai target:** Dear ImGui + DirectX11 native desktop app, **Tahoma** font, **NO web
+**Nxrth target:** Dear ImGui + DirectX11 native desktop app, **Tahoma** font, **NO web
 server**, **NO Lua**. Everything the Mori web dashboard exposed becomes a native ImGui
 panel or control; the HTTP/WebSocket transport disappears and handlers become direct
 in-process function calls guarded by a mutex.
@@ -19,26 +19,26 @@ the UI forms must produce/consume.
 
 ## 0. RENAME RULES (apply everywhere in the port)
 
-Global substitution rules for the whole Adonai codebase:
+Global substitution rules for the whole Nxrth codebase:
 
-| Mori identifier | Adonai replacement |
+| Mori identifier | Nxrth replacement |
 |---|---|
-| `Mori` / `mori` | `Adonai` / `adonai` |
+| `Mori` / `mori` | `Nxrth` / `nxrth` |
 | `Cloei` / `cloei` (upstream author/repo) | `North` / `north` |
 
 **Concrete occurrences found in the 5 files of THIS module:**
 
 | File | Line | Original | Rename to |
 |---|---|---|---|
-| `logger.rs` | 9 | `"mori_debug.log"` (open in `init_logger`) | `"adonai_debug.log"` |
-| `logger.rs` | 23 | `"mori_debug.log"` (open in `log`) | `"adonai_debug.log"` |
-| `logger.rs` | 30 (comment) | "written to mori_debug.log" | "written to adonai_debug.log" |
-| `web.rs` | 813 | injected footer HTML `Mori created with ❤︎ by Cendy` | **Panel is removed entirely** (no web frontend). If a credit line is kept in the ImGui "About" it becomes `Adonai created with ❤ by Cendy`. `Cendy` is **not** covered by the rename rules — leave `Cendy` as-is unless the caller says otherwise. (No `Cloei/cloei` token appears in these 5 files.) |
+| `logger.rs` | 9 | `"mori_debug.log"` (open in `init_logger`) | `"nxrth_debug.log"` |
+| `logger.rs` | 23 | `"mori_debug.log"` (open in `log`) | `"nxrth_debug.log"` |
+| `logger.rs` | 30 (comment) | "written to mori_debug.log" | "written to nxrth_debug.log" |
+| `web.rs` | 813 | injected footer HTML `Mori created with ❤︎ by Cendy` | **Panel is removed entirely** (no web frontend). If a credit line is kept in the ImGui "About" it becomes `Nxrth created with ❤ by Cendy`. `Cendy` is **not** covered by the rename rules — leave `Cendy` as-is unless the caller says otherwise. (No `Cloei/cloei` token appears in these 5 files.) |
 
 No `Mori`/`mori` tokens appear in `main.rs`, `bot/mod.rs`, or `lua/mod.rs`. No window
 title, user-agent, or config filename other than `mori_debug.log` appears in this module.
 (The `growtopia_cdn` fetch uses `ureq`'s default UA; when reimplemented on libcurl set an
-Adonai UA if a UA is desired — none is set in the Rust.)
+Nxrth UA if a UA is desired — none is set in the Rust.)
 
 ---
 
@@ -70,10 +70,10 @@ Startup sequence:
    `Arc<Mutex<BotManager>>` → this is `SharedManager`.
 4. `web::serve(mgr, ws_tx).await` — runs forever (the axum server).
 
-### 1.2 Adonai port
+### 1.2 Nxrth port
 
 - `#[tokio::main]` → a normal `int main()` (or WinMain) that:
-  1. Calls `logger::init()` (writes the banner to `adonai_debug.log`).
+  1. Calls `logger::init()` (writes the banner to `nxrth_debug.log`).
   2. Creates the **event bus** (replaces the tokio broadcast channel; see §4.2): a
      bounded, fan-out, mutex+condvar queue with a **capacity of 256** and *drop-oldest
      when a consumer lags* semantics (matches the tokio `Lagged` behavior — see §5.6).
@@ -90,9 +90,9 @@ Startup sequence:
 
 ## 2. THE DASHBOARD, AS AN IMGUI PANEL CHECKLIST (`web.rs`)
 
-Every route below is a feature the current dashboard exposes. In Adonai each becomes a
+Every route below is a feature the current dashboard exposes. In Nxrth each becomes a
 direct call into `BotManager`/`ProxyPool`/etc. from an ImGui widget — there is no HTTP.
-The **request DTO** columns are the exact JSON the current frontend sends; in Adonai they
+The **request DTO** columns are the exact JSON the current frontend sends; in Nxrth they
 become the form-state structs backing each panel.
 
 ### 2.0 Shared app state
@@ -111,7 +111,7 @@ pub struct AppState {
 }
 ```
 
-Adonai: a single `AppContext` struct holding `BotManager* (mutex-guarded)`, the event-bus
+Nxrth: a single `AppContext` struct holding `BotManager* (mutex-guarded)`, the event-bus
 publisher, an `AuthState` (see §2.1 — becomes optional local gate), and a
 mutex-guarded `ProxyPool`. Passed by reference to every panel's render function.
 
@@ -125,7 +125,7 @@ normally; ensure no panic-equivalent (exception) is thrown while the lock is hel
 > **NOTE — auth is NOT enforced server-side in this Rust.** The router (`serve()`)
 > applies only a CORS layer; there is **no auth middleware** on the "Protected API"
 > routes despite the comment. `AuthState` mints a token on login but no route validates
-> it. In Adonai, treat this as an **optional local unlock screen** (single-user password
+> it. In Nxrth, treat this as an **optional local unlock screen** (single-user password
 > gate) that hides panels until unlocked; it is not a security boundary.
 
 | Method / path | Handler | Request DTO (defined in web.rs) | Response | Behavior |
@@ -211,7 +211,7 @@ ImGui controls (Bots panel):
   - All modes share the proxy block: `proxy_host`, `proxy_port`, `proxy_username`,
     `proxy_password`, and a **"Use proxy pool"** checkbox (default ON).
 - **"Remove"/"Stop" button** per row → `stop(id)`.
-- **Auto-refresh** the list; in Adonai just read `manager.list()` each frame (or on
+- **Auto-refresh** the list; in Nxrth just read `manager.list()` each frame (or on
   event) rather than polling an HTTP endpoint.
 
 ### 2.3 Account-device import panel — `POST /account-devices/import`
@@ -244,7 +244,7 @@ Exact variants → `BotCommand` mapping:
 |---|---|---|---|
 | `move` | `x: i32`, `y: i32` | `Move { x, y }` | Raw-position nudge (pixel coords) |
 | `walk_to` | `x: u32`, `y: u32` | `WalkTo { x, y }` | Click-to-walk on world view (tile coords; A* pathfind) |
-| `run_script` | `content: String` | `RunScript { content }` | **Lua source** box — see §2.10 (dropped in Adonai; NO Lua) |
+| `run_script` | `content: String` | `RunScript { content }` | **Lua source** box — see §2.10 (dropped in Nxrth; NO Lua) |
 | `stop_script` | — | `StopScript` | "Stop script" button |
 | `wear` | `item_id: u32` | `Wear { item_id }` | Item context menu / inventory panel |
 | `unwear` | `item_id: u32` | `Unwear { item_id }` | Item context menu |
@@ -332,7 +332,7 @@ Handler `proxy_check`: build addr `"{host}:{port}"` parsed to `SocketAddr`
 (`400 Bad Request` on parse failure); build `Socks5Config { proxy_addr, username, password }`;
 run `run_proxy_test(cfg)` on a **blocking thread** (`tokio::task::spawn_blocking`);
 return `ProxyTestResult` (owned by `proxy_test` module spec) or `500` if the blocking task
-join fails. In Adonai run `run_proxy_test` on a worker `std::thread` and show a spinner →
+join fails. In Nxrth run `run_proxy_test` on a worker `std::thread` and show a spinner →
 result. This is the **"Test proxy"** button in both the Add-bot form and the pool editor.
 
 ### 2.7 Proxy pool editor — `GET/PUT /proxy/pool`
@@ -375,7 +375,7 @@ ImGui **Proxy Pool** panel controls:
 
 > **Fleet-awareness (per FOCUS §4):** `proxy_key_counts()` is a fleet-wide tally of how
 > many live bots use each proxy key; the pool's `choose(&counts)` uses it to spread bots
-> under `max_bots_per_ip`. This is exactly the kind of cross-bot shared state Adonai must
+> under `max_bots_per_ip`. This is exactly the kind of cross-bot shared state Nxrth must
 > keep centralized in `BotManager`.
 
 ### 2.8 Rotation-pool viewer — `GET/DELETE /rotation/pool/{pool_id}`
@@ -385,7 +385,7 @@ ImGui **Proxy Pool** panel controls:
 - **`DELETE`** — `rotation_pool_delete(pool_id)`: `rotation_pool::clear(&pool_id)` → `204`.
 
 Note `rotation_pool` is accessed via **free functions** (module-global state), not through
-`AppState` — i.e. a process-global registry keyed by `pool_id: String`. In Adonai keep it
+`AppState` — i.e. a process-global registry keyed by `pool_id: String`. In Nxrth keep it
 as a singleton owned by `BotManager` or a global service; expose a **"Rotation pools"**
 viewer panel with a per-pool snapshot table and a **"Clear"** button.
 
@@ -413,14 +413,14 @@ minting IP, so a *consistent* login proxy matters).
 
 `json_error(status, msg) -> Response`: `(status, Json({"error": msg}))`.
 
-Adonai: these become plain helper functions returning `std::optional<Socks5Config>` (or a
+Nxrth: these become plain helper functions returning `std::optional<Socks5Config>` (or a
 `tl::expected`/error string) that the Add-bot panel calls before dispatching a spawn. The
 `400`/error responses become inline form validation errors / toasts.
 
 ### 2.10 Console stream + script runner (Lua) — dropped/rewritten
 
 - **`run_script` / `stop_script`** commands carry a **Lua source string** and drive the
-  Lua subsystem (`lua/mod.rs` → `run_script_threaded`; see §6). **Adonai has NO Lua.**
+  Lua subsystem (`lua/mod.rs` → `run_script_threaded`; see §6). **Nxrth has NO Lua.**
   The "script content" box and Lua console are **removed**; automations become native C++
   routines selected/toggled from the Automation panel. Keep `stop_script`/`StopScript`
   semantics as a generic "stop current automation" control.
@@ -490,7 +490,7 @@ ImGui **Traffic / Geiger** panel:
 - **"Save capture"** button → writes the `.json` + `.txt` files under
   `data/geiger_captures/` using the exact naming/format above, then shows the two paths.
 - The packet capture itself is produced by the geiger subsystem (`lua/geiger_stats.rs` in
-  Mori; in Adonai this is native ENet packet tapping — no Lua). The DTOs above are the
+  Mori; in Nxrth this is native ENet packet tapping — no Lua). The DTOs above are the
   serialization contract to preserve so old captures remain readable.
 
 ### 2.12 Growtopia CDN proxy — `GET /growtopia-cdn/{*path}`
@@ -502,7 +502,7 @@ blocking `ureq::get(url).call()`:
 - On request error or join error → `502 Bad Gateway`.
 
 Purpose: the web frontend proxied item render assets through the app to avoid CORS. In
-**Adonai (native), CORS is a non-issue** — fetch item textures directly with libcurl if
+**Nxrth (native), CORS is a non-issue** — fetch item textures directly with libcurl if
 needed, or bake/ship them. This endpoint can be **dropped**; keep only the upstream URL
 constant `https://growserver-cache.netlify.app/{path}` if you still fetch render assets.
 
@@ -513,9 +513,9 @@ constant `https://growserver-cache.netlify.app/{path}` if you still fetch render
 - Fallback: `ServeDir::new(dist).fallback(ServeFile::new(dist/index.html))` — serves the
   built SPA and SPA-routes to index.html.
 
-**Adonai: entirely removed.** There is no `dist/`, no static serving, no HTML footer
+**Nxrth: entirely removed.** There is no `dist/`, no static serving, no HTML footer
 injection. The UI is the compiled ImGui app. (If a credit is desired, put
-`Adonai created with ❤ by Cendy` in an About window; see §0.)
+`Nxrth created with ❤ by Cendy` in an About window; see §0.)
 
 ### 2.14 Full route table (server wiring, for completeness)
 
@@ -557,7 +557,7 @@ Dashboard  http://localhost:3000
 WebSocket  ws://localhost:3000/ws
 API        http://localhost:3000/bots
 ```
-Bind `.unwrap()` and `axum::serve(...).unwrap()` — panics on failure. **Adonai drops all
+Bind `.unwrap()` and `axum::serve(...).unwrap()` — panics on failure. **Nxrth drops all
 of this**; the "server" is the ImGui window. (Optionally keep an internal "listening"
 log-line noting the UI started.)
 
@@ -565,7 +565,7 @@ log-line noting the UI started.)
 
 ## 3. LOGGING (`logger.rs`)
 
-Two free functions + one helper. File name **`mori_debug.log` → `adonai_debug.log`**.
+Two free functions + one helper. File name **`mori_debug.log` → `nxrth_debug.log`**.
 
 ### `init_logger()`
 - Open (`create`, `append`) `mori_debug.log` (unwrap → panic on error).
@@ -585,8 +585,8 @@ Two free functions + one helper. File name **`mori_debug.log` → `adonai_debug.
 - Rationale (from the code comment): per-frame `GameUpdatePacket` lines flood the console;
   suppress from stdout but keep in the file.
 
-### Adonai port
-- `logger::init()` writes the banner to `adonai_debug.log`.
+### Nxrth port
+- `logger::init()` writes the banner to `nxrth_debug.log`.
 - `logger::log(msg)` appends `[timestamp] msg\n` to the file. In C++ format time with
   `std::chrono` / `strftime("%Y-%m-%d %H:%M:%S")`.
 - **The stdout print becomes an ImGui console feed**: push the line into the console
@@ -598,7 +598,7 @@ Two free functions + one helper. File name **`mori_debug.log` → `adonai_debug.
   call `log()` concurrently. Do not open/close the file per call in the hot path if it
   hurts; a single mutex-guarded stream is fine, but keep append semantics and never
   truncate.
-- Do **not** panic on log IO errors in Adonai (the Rust `.unwrap()`s do); degrade quietly.
+- Do **not** panic on log IO errors in Nxrth (the Rust `.unwrap()`s do); degrade quietly.
 
 ---
 
@@ -620,7 +620,7 @@ Two free functions + one helper. File name **`mori_debug.log` → `adonai_debug.
 - **Process-global registries (no `AppState`):** `rotation_pool::{snapshot,clear,…}` and
   `account_devices::upsert_from_login_token` are module-level global/disk state.
 
-### 4.2 Fleet-wide shared state (Adonai must keep bots aware of each other)
+### 4.2 Fleet-wide shared state (Nxrth must keep bots aware of each other)
 The following are inherently cross-bot and must live in **one central, mutex-guarded
 place** (`BotManager` or dedicated singletons) so every bot/panel sees the same view:
 - **`proxy_key_counts()`** — live per-proxy bot tally; drives `ProxyPool::choose` and
@@ -630,7 +630,7 @@ place** (`BotManager` or dedicated singletons) so every bot/panel sees the same 
 - **`account_devices`** — shared credential/device store (disk-backed).
 - **The event bus** — a single fan-out feed all UI panels subscribe to.
 
-### 4.3 Adonai model
+### 4.3 Nxrth model
 - Replace Tokio with **`std::thread`**: each bot runs on its own thread (as in Mori's
   `bot` module); the **UI runs on the main thread** (Win32 message pump + DX11 present
   loop). There is no server accept loop.
@@ -651,9 +651,9 @@ place** (`BotManager` or dedicated singletons) so every bot/panel sees the same 
 
 ---
 
-## 5. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 5. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
-| Rust (this module) | Used for | Adonai C++ replacement |
+| Rust (this module) | Used for | Nxrth C++ replacement |
 |---|---|---|
 | `axum` (Router, routing, extract, ws, Json, Query, Path, State) | HTTP+WS server, routing, request parsing | **Removed.** Dear ImGui panels call handler-equivalent functions directly. Path/Query/JSON body parsing → ImGui form state structs. |
 | `tower` / `tower-http` (`CorsLayer`, `ServeDir`, `ServeFile`) | CORS + static SPA serving | **Removed.** No CORS (in-process). No static file serving — UI is compiled in. |
@@ -668,7 +668,7 @@ place** (`BotManager` or dedicated singletons) so every bot/panel sees the same 
 
 ---
 
-## 6. LUA SUBSYSTEM ENTRY (`lua/mod.rs`) — REMOVED in Adonai
+## 6. LUA SUBSYSTEM ENTRY (`lua/mod.rs`) — REMOVED in Nxrth
 
 `lua/mod.rs` is a module aggregator:
 ```rust
@@ -679,7 +679,7 @@ It re-exports **`run_script_threaded`** — the entry point that runs a Lua scri
 own thread; this is what the `RunScript`/`run_script` command ultimately drives, and
 `geiger_stats` is the traffic/geiger stats collector exposed to Lua.
 
-**Adonai has NO Lua** (mandated). Therefore:
+**Nxrth has NO Lua** (mandated). Therefore:
 - Drop `mlua` and the entire `lua/` tree.
 - `run_script`/`stop_script` commands → native automation start/stop (no script source).
 - Geiger stats/traffic capture (`geiger_stats`) → native C++ ENet packet tap feeding the
@@ -696,7 +696,7 @@ pub use core::Bot;
 pub use shared::{BotEventRaw, Socks5Config};
 ```
 No logic here. The UI/glue only needs `Socks5Config` (see §2.9). `Bot`, `BotEventRaw`, and
-the auth/core internals are covered by the `bot` module spec. In Adonai keep the same
+the auth/core internals are covered by the `bot` module spec. In Nxrth keep the same
 split: a `Bot` class (its own thread), a shared types header (`Socks5Config`,
 `BotEventRaw`), and the login/auth code.
 
@@ -736,7 +736,7 @@ Each item = one ImGui panel/control replacing a dashboard feature. `▢` = to bu
 
 ## 9. EXACT CONSTANTS & MAGIC STRINGS TO PRESERVE
 
-- Log file: `mori_debug.log` → **`adonai_debug.log`**. Banner:
+- Log file: `mori_debug.log` → **`nxrth_debug.log`**. Banner:
   `\n--- Log Started at {YYYY-MM-DD HH:MM:SS} ---`. Line: `[{YYYY-MM-DD HH:MM:SS}] {msg}`.
   Spam prefix test: strip `[Bot` … `] `, then `starts_with("GameUpdatePacket")`.
 - Event-bus capacity: **256**.
@@ -759,8 +759,8 @@ Each item = one ImGui panel/control replacing a dashboard feature. `▢` = to bu
 
 ## 10. FILES / PATHS TOUCHED BY THIS MODULE
 
-- Reads/serves (removed in Adonai): `<cwd>/dist/index.html` and `<cwd>/dist/**` (SPA).
-- Writes: `<cwd>/mori_debug.log` → `adonai_debug.log`;
+- Reads/serves (removed in Nxrth): `<cwd>/dist/index.html` and `<cwd>/dist/**` (SPA).
+- Writes: `<cwd>/mori_debug.log` → `nxrth_debug.log`;
   `<cwd>/data/geiger_captures/*.json` and `*.txt`.
 - Reads (HAR spawn): `requestly_logs.har` (default; passed to `spawn_har_token`).
 - Global/disk state via free functions: `account_devices` store, `rotation_pool` registry,

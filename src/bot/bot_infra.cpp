@@ -1,4 +1,4 @@
-// Adonai — Bot infrastructure methods + packet-text helpers that the split
+// Nxrth — Bot infrastructure methods + packet-text helpers that the split
 // bot_connection/handlers/world translation units all rely on but none defined
 // (each assumed a sibling did). Implemented here once.
 #include "bot/bot.h"
@@ -13,7 +13,7 @@
 #include "bot/bot_state.h"
 #include "core/logger.h"
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 // ---------------------------------------------------------------------------
 // Free helpers (declared in bot.h)
@@ -62,10 +62,14 @@ std::unordered_map<std::string, std::string> parse_pipe_map(const std::string& s
 
 void Bot::log_console(const std::string& msg) {
     // Per-bot SYSTEM log ring (the detail "Logs" tab reads BotState.console).
+    // Opt-in: only recorded while the bot's "Enable logs" toggle is on, so a fresh
+    // fleet does not accumulate per-bot logs nobody asked for. The shared/global
+    // Logger below is still written (fleet_logs / shared Console stay available).
     if (state_) {
         state_->write([&](BotState& s) {
+            if (!s.logs_enabled) return;
             s.console.push_back(msg);
-            if (s.console.size() > CONSOLE_RING_CAP) s.console.erase(s.console.begin());
+            if (s.console.size() > CONSOLE_RING_CAP) s.console.pop_front();
         });
     }
     // Forward to the UI event sink (it writes the shared Logger the global Console
@@ -73,7 +77,7 @@ void Bot::log_console(const std::string& msg) {
     if (sink_)
         sink_->console(bot_id_, msg);
     else
-        adonai::log(msg, static_cast<int>(bot_id_));
+        nxrth::log(msg, static_cast<int>(bot_id_));
 }
 
 void Bot::log_chat(const std::string& msg) {
@@ -83,7 +87,7 @@ void Bot::log_chat(const std::string& msg) {
         state_->write([&](BotState& s) {
             s.chat.push_back(msg);
             if (s.chat.size() > CONSOLE_RING_CAP) {
-                s.chat.erase(s.chat.begin());
+                s.chat.pop_front();
                 ++s.chat_base_index;
             }
         });
@@ -91,7 +95,7 @@ void Bot::log_chat(const std::string& msg) {
     if (sink_)
         sink_->console(bot_id_, msg);
     else
-        adonai::log(msg, static_cast<int>(bot_id_));
+        nxrth::log(msg, static_cast<int>(bot_id_));
 }
 
 void Bot::emit_status(BotStatus status) {
@@ -108,6 +112,17 @@ void Bot::emit_traffic(const std::string& direction, const std::string& kind, st
     if (sink_)
         sink_->traffic(bot_id_, direction, kind, size, /*summary=*/detail, /*detail=*/detail,
                        /*timestamp_ms=*/0);
+    // Mirror into the per-bot Traffic ring for the desktop UI (IN/OUT prefix drives
+    // the Show Incoming / Show Outgoing filters). Kept only while capture is enabled.
+    if (state_) {
+        std::string line = (direction == "out" ? "OUT " : "IN  ") + kind + "  " +
+                           std::to_string(size) + "b" + (detail.empty() ? "" : "  " + detail);
+        state_->write([&](BotState& s) {
+            if (!s.traffic_enabled) return;
+            s.traffic.push_back(std::move(line));
+            while (s.traffic.size() > CONSOLE_RING_CAP) s.traffic.pop_front();
+        });
+    }
 }
 
 // Dispatch a UI/automation command to the matching action helper.
@@ -120,7 +135,7 @@ void Bot::handle_command(const BotCommand& cmd) {
             else if constexpr (std::is_same_v<T, cmd::WalkTo>)
                 find_path(c.x, c.y);
             else if constexpr (std::is_same_v<T, cmd::RunScript>)
-                log_console("[Bot] scripts are not supported in Adonai (native automation only)");
+                log_console("[Bot] scripts are not supported in Nxrth (native automation only)");
             else if constexpr (std::is_same_v<T, cmd::StopScript>)
                 script_stop_->store(true);
             else if constexpr (std::is_same_v<T, cmd::Say>)
@@ -183,8 +198,22 @@ void Bot::handle_command(const BotCommand& cmd) {
                 set_direction(c.left);
             else if constexpr (std::is_same_v<T, cmd::WrenchPlayer>)
                 wrench_player(c.net_id);
+            else if constexpr (std::is_same_v<T, cmd::SetTrafficLog>) {
+                const bool on = c.enabled;
+                if (state_) state_->write([&](BotState& s) {
+                    s.traffic_enabled = on;
+                    if (!on) s.traffic.clear();
+                });
+            }
+            else if constexpr (std::is_same_v<T, cmd::SetLogging>) {
+                const bool on = c.enabled;
+                if (state_) state_->write([&](BotState& s) {
+                    s.logs_enabled = on;
+                    if (!on) s.console.clear();
+                });
+            }
         },
         cmd);
 }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

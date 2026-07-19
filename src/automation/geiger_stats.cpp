@@ -1,4 +1,4 @@
-// Adonai - process-global geiger farm aggregate implementation.
+// Nxrth - process-global geiger farm aggregate implementation.
 #include "automation/geiger_stats.h"
 
 #include <nlohmann/json.hpp>
@@ -9,7 +9,7 @@
 #include <sstream>
 #include <string>
 
-namespace adonai::automation {
+namespace nxrth::automation {
 namespace {
 
 std::mutex& mu() {
@@ -126,4 +126,4 @@ void clear_geiger_webhook_message_id(const std::string& url) {
     save_locked();
 }
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

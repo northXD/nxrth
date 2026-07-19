@@ -6,23 +6,23 @@
 
 #include <nlohmann/json.hpp>
 
-namespace adonai::bot {
+namespace nxrth::bot {
 class BotManager;
 }
 
-namespace adonai::proxy {
+namespace nxrth::proxy {
 class ProxyPool;
 }
 
-namespace adonai::mcp {
+namespace nxrth::mcp {
 
 // Hosts the MCP engine inside the desktop application. Pipe I/O happens on a
 // worker thread, while pump() executes requests on the UI thread that owns the
 // BotManager and ProxyPool.
 class AppMcpBridgeServer {
 public:
-    AppMcpBridgeServer(adonai::bot::BotManager& manager,
-                       adonai::proxy::ProxyPool& proxy_pool);
+    AppMcpBridgeServer(nxrth::bot::BotManager& manager,
+                       nxrth::proxy::ProxyPool& proxy_pool);
     ~AppMcpBridgeServer();
 
     AppMcpBridgeServer(const AppMcpBridgeServer&) = delete;
@@ -43,4 +43,4 @@ private:
 bool forward_request_to_app(const nlohmann::json& request,
                             std::optional<nlohmann::json>& response);
 
-}  // namespace adonai::mcp
+}  // namespace nxrth::mcp

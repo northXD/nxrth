@@ -1,4 +1,4 @@
-// Adonai — SOCKS5 UDP ASSOCIATE client (ported from Mori/socks5.rs).
+// Nxrth — SOCKS5 UDP ASSOCIATE client (ported from Mori/socks5.rs).
 //
 // Two responsibilities live here:
 //   1. The SOCKS5 handshake: method negotiation, RFC-1929 user/pass auth, and
@@ -8,7 +8,7 @@
 //      and IPv6 address bytes are BIG-ENDIAN (network order).
 //
 // The actual send/receive datapath is NOT implemented as a socket wrapper here.
-// In Mori the wrapper implemented rusty_enet::Socket; in Adonai this becomes a
+// In Mori the wrapper implemented rusty_enet::Socket; in Nxrth this becomes a
 // patch to the vendored C ENet socket layer (enet_socket_send /
 // enet_socket_receive). That patch (net/enet_socks5_patch.cpp) reuses
 // create_udp_header / parse_udp_header from this module and holds a
@@ -29,7 +29,7 @@
 #include <string>
 #include <vector>
 
-namespace adonai::net {
+namespace nxrth::net {
 
 // Shared proxy descriptor. This is the type proxy_pool + enet_host consume when
 // pinning one egress proxy per bot. host may be a hostname or a literal IP;
@@ -159,4 +159,4 @@ private:
     void close_all();
 };
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

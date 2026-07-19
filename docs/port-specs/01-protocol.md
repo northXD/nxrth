@@ -1,11 +1,11 @@
-# Adonai Port Spec 01 — `protocol` module
+# Nxrth Port Spec 01 — `protocol` module
 
 **Source (Mori 2.0.0, Rust):** `src/protocol/packet.rs`, `src/protocol/variant.rs`, `src/protocol/crypto.rs`, `src/protocol/mod.rs`
-**Target (Adonai, C++):** `adonai::protocol` namespace — suggested files `protocol/packet.hpp/.cpp`, `protocol/variant.hpp/.cpp`, `protocol/crypto.hpp/.cpp`.
+**Target (Nxrth, C++):** `nxrth::protocol` namespace — suggested files `protocol/packet.hpp/.cpp`, `protocol/variant.hpp/.cpp`, `protocol/crypto.hpp/.cpp`.
 
 This module is the Growtopia (GT) wire codec: outer ENet message framing, the tank/GameUpdatePacket 56-byte struct, VariantList deserialization, and the login crypto (`klv`, GT hash). **GT is little-endian on the wire; every multi-byte integer/float below is LE unless stated otherwise.** This spec is the single source of truth — reimplement in C++ without reading the Rust.
 
-> **Scope note on `crc32`:** the FOCUS mentions `crc32`, but **no `crc32` function exists in any of these four files.** `hash_string` (the GT rotate-left-5 hash) *is* here and is documented below. If Adonai needs CRC32 it lives in a different Mori module (likely login / item-database) and must be specced separately. Do not invent one here.
+> **Scope note on `crc32`:** the FOCUS mentions `crc32`, but **no `crc32` function exists in any of these four files.** `hash_string` (the GT rotate-left-5 hash) *is* here and is documented below. If Nxrth needs CRC32 it lives in a different Mori module (likely login / item-database) and must be specced separately. Do not invent one here.
 
 ---
 
@@ -204,7 +204,7 @@ C++: `std::vector<uint8_t> to_bytes() const;`
 
 ### 4.4 Display / logging
 
-Rust `Display`: `GameUpdatePacket { type=<Debug>, net_id=<n>, pos=(x,y), vel=(x2,y2), flags=<Debug> }` with `{:.1}` on the four floats. Adonai log lines are optional; if you replicate, use one decimal place for pos/vel. (Rename any surrounding `Mori` log tag → `Adonai`; none appears in the format string itself.)
+Rust `Display`: `GameUpdatePacket { type=<Debug>, net_id=<n>, pos=(x,y), vel=(x2,y2), flags=<Debug> }` with `{:.1}` on the four floats. Nxrth log lines are optional; if you replicate, use one decimal place for pos/vel. (Rename any surrounding `Mori` log tag → `Nxrth`; none appears in the format string itself.)
 
 ---
 
@@ -256,7 +256,7 @@ string  = utf8_decode(segment)   // strict; on invalid UTF-8 the whole parse ret
 ```
 Rust code: `payload.split(|&b| b == 0 || b >= 0x80).next().unwrap_or(payload)`. So any high-bit byte (`>= 0x80`) also terminates the string, not just NUL. C++: scan for the first `b == 0 || b >= 0x80`, take the prefix, validate/decode as UTF-8. On invalid UTF-8, treat as a parse failure (return no packet) to mirror Rust's strict `from_utf8`.
 
-> Adonai note: because C++ strings are byte buffers, "UTF-8 validation" can be a lightweight check; but to match Mori's behavior of *dropping* an un-decodable packet, keep a validity check and skip on failure.
+> Nxrth note: because C++ strings are byte buffers, "UTF-8 validation" can be a lightweight check; but to match Mori's behavior of *dropping* an un-decodable packet, keep a validity check and skip on failure.
 
 ---
 
@@ -300,7 +300,7 @@ Accessors:
 - `as_uint32() -> u32`: `Unsigned(v) → v`, else `0`.
 - `as_vec2() -> (f32,f32)`: `Vec2(x,y) → (x,y)`, else `(0.0, 0.0)`.
 
-> **Float→string formatting subtlety:** Rust `to_string` on floats emits the shortest string that round-trips (trailing `.0` dropped for integers, e.g. `5.0 → "5"`). If any Adonai logic compares/uses these strings, match it (e.g. a shortest-round-trip formatter, or strip trailing `.0`/zeros). If `as_string` is only used for logging, exact fidelity is not correctness-critical.
+> **Float→string formatting subtlety:** Rust `to_string` on floats emits the shortest string that round-trips (trailing `.0` dropped for integers, e.g. `5.0 → "5"`). If any Nxrth logic compares/uses these strings, match it (e.g. a shortest-round-trip formatter, or strip trailing `.0`/zeros). If `as_string` is only used for logging, exact fidelity is not correctness-critical.
 
 C++ `Variant`: `std::variant<float, std::string, Vec2, Vec3, uint32_t, int32_t, std::monostate>` or a tagged struct with a `VariantType tag` + union-ish payload. Provide the four accessors with the exact fallbacks above.
 
@@ -356,7 +356,7 @@ C++ signature: `std::optional<VariantList> VariantList::deserialize(std::span<co
 | `f32() -> Result<f32>` | read 4 bytes **LE** (IEEE-754), advance 4 |
 | `bytes(len) -> Result<Vec<u8>/&[u8]>` | read `len` bytes, advance `len`; err if short |
 
-Adonai: implement a `BinaryReader { const uint8_t* p; size_t len; size_t pos; }` with those methods returning `std::optional`/throwing/`bool`+out-param. Endianness = LE. On overrun, signal failure so `deserialize` can bail. (Do not build a full Cursor spec here — that's a separate module; just satisfy this interface.)
+Nxrth: implement a `BinaryReader { const uint8_t* p; size_t len; size_t pos; }` with those methods returning `std::optional`/throwing/`bool`+out-param. Endianness = LE. On overrun, signal failure so `deserialize` can bail. (Do not build a full Cursor spec here — that's a separate module; just satisfy this interface.)
 
 ---
 
@@ -451,9 +451,9 @@ Returns `random_hex(32)` → **32 uppercase hex chars**. ⚠️ The Rust doc-com
 
 ---
 
-## 11. Dependency mapping (Rust crate → Adonai C++)
+## 11. Dependency mapping (Rust crate → Nxrth C++)
 
-| Rust (in these files) | Used for | Adonai C++ |
+| Rust (in these files) | Used for | Nxrth C++ |
 |-----------------------|----------|------------|
 | `bitflags` | `PacketFlags` | plain `constexpr uint32_t` masks; store raw `uint32_t`; **retain unknown bits** (mirror `from_bits_retain`) |
 | `anyhow::Result` | `VariantList::deserialize` error | `std::optional<T>` / `bool`+out-param (matches the `Option` style used in `packet.rs`) |
@@ -462,16 +462,16 @@ Returns `random_hex(32)` → **32 uppercase hex chars**. ⚠️ The Rust doc-com
 | `rand` (`rand::rng`, `random::<u8>`) | `random_hex`/`random_mac`/`generate_rid` | any decent RNG (`std::mt19937` seeded from `std::random_device`, or platform CSPRNG). No reproducibility requirement — pure randomness for per-bot identity |
 | `std::fmt` | `Display` for logging | `std::format`/`operator<<` (optional) |
 
-Module-wide, per the Adonai stack: no Lua (`mlua`) here, no HTTP (`ureq`/`reqwest`) here, no ENet API here — this module is a **pure codec** consumed by the ENet transport module. (ENet itself → vendored C ENet patched for SOCKS5-UDP, in the transport module, not here.)
+Module-wide, per the Nxrth stack: no Lua (`mlua`) here, no HTTP (`ureq`/`reqwest`) here, no ENet API here — this module is a **pure codec** consumed by the ENet transport module. (ENet itself → vendored C ENet patched for SOCKS5-UDP, in the transport module, not here.)
 
 ---
 
 ## 12. Threading & shared state
 
 - **Everything in this module is pure / stateless.** `packet.rs` and `variant.rs` are value types + free functions with no globals, no I/O, no locks. `crypto.rs` functions are pure except `random_*`/`generate_*`, which pull from a thread-local RNG (`rand::rng()`), so they are inherently thread-safe/reentrant.
-- **Thread-safety in Adonai:** make all functions free/`static` and re-entrant. No shared mutable state to guard — no mutex/condvar needed inside this module.
+- **Thread-safety in Nxrth:** make all functions free/`static` and re-entrant. No shared mutable state to guard — no mutex/condvar needed inside this module.
 - **Who calls it:** each bot's ENet receive thread calls `IncomingPacket::parse` / `GameUpdatePacket::from_bytes` / `VariantList::deserialize` on its own inbound buffers; each bot's send path calls `make_*_packet` / `GameUpdatePacket::to_bytes`; the login flow calls `compute_klv` / `hash_string` / `generate_rid` / `random_mac` **once per bot** at connect time.
-- **Fleet-wide shared state (Adonai requirement that bots be aware of each other):** this module produces the *decoded* packets that feed the per-bot world/state model; the **shared** fleet state lives one layer up (the world/net-id/inventory model), not here. Two consequences for the port:
+- **Fleet-wide shared state (Nxrth requirement that bots be aware of each other):** this module produces the *decoded* packets that feed the per-bot world/state model; the **shared** fleet state lives one layer up (the world/net-id/inventory model), not here. Two consequences for the port:
   1. Keep `from_bytes`/`deserialize` allocation-light and copy-in (they already return owned data: `extra_data` is copied, strings are owned) so decoded packets can be safely handed across threads to a shared state store without lifetime hazards. (`IncomingPacket` borrows the input slice — in C++ prefer returning owned copies, or ensure the backing buffer outlives consumers, since the fleet store may be on another thread.)
   2. `generate_rid()` / `random_mac()` produce **per-bot identity** — generate once, store on the bot, and register in the shared fleet registry so bots don't collide and can recognize each other's net-ids.
 
@@ -479,11 +479,11 @@ Module-wide, per the Adonai stack: no Lua (`mlua`) here, no HTTP (`ureq`/`reqwes
 
 ## 13. Rename rules applied to this module
 
-Global rules: `Mori`/`mori` → `Adonai`/`adonai`; `Cloei`/`cloei` → `North`/`north` (identifiers, paths, log lines, window titles, user-agents, config filenames).
+Global rules: `Mori`/`mori` → `Nxrth`/`nxrth`; `Cloei`/`cloei` → `North`/`north` (identifiers, paths, log lines, window titles, user-agents, config filenames).
 
 **Concrete occurrences found in these four files:**
 - **None** of the literal tokens `Mori`, `mori`, `Cloei`, or `cloei` appear in `packet.rs`, `variant.rs`, `crypto.rs`, or `mod.rs`. No log lines, user-agents, window titles, or config filenames are present here.
-- The only surrounding rename is the **crate root namespace**: `crate::cursor::Cursor` — the Rust crate is `mori`, so in C++ everything goes under `namespace adonai` (e.g. `adonai::protocol`, `adonai::cursor`). Any place the crate name leaks (paths, `use crate::...`) becomes `adonai`.
+- The only surrounding rename is the **crate root namespace**: `crate::cursor::Cursor` — the Rust crate is `mori`, so in C++ everything goes under `namespace nxrth` (e.g. `nxrth::protocol`, `nxrth::cursor`). Any place the crate name leaks (paths, `use crate::...`) becomes `nxrth`.
 - The string label `"variant"` in `Cursor::new(data, "variant")` is a parser context label, **not** a brand token — keep as `"variant"`.
 - **Do NOT rename** the five KLV keys (`KEY1..KEY5`), the GT message-type numbers, the `GamePacketType` byte values, the `PacketFlags` values, the `hash_string` seed `0x55555555`, or `GAME_PACKET_SIZE = 56` — these are Growtopia protocol constants and must stay byte-exact.
 
@@ -492,7 +492,7 @@ Global rules: `Mori`/`mori` → `Adonai`/`adonai`; `Cloei`/`cloei` → `North`/`
 ## 14. Suggested C++ surface (non-normative sketch)
 
 ```cpp
-namespace adonai::protocol {
+namespace nxrth::protocol {
 
 // §1
 inline constexpr uint32_t MSG_SERVER_HELLO      = 1;
@@ -540,7 +540,7 @@ std::string random_hex(size_t n);                      // n uppercase hex nibble
 std::string random_mac();                              // "02:XX:XX:XX:XX:XX"
 std::string generate_rid();                            // == random_hex(32)
 
-} // namespace adonai::protocol
+} // namespace nxrth::protocol
 ```
 
 **End of spec 01-protocol.**

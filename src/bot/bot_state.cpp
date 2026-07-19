@@ -1,8 +1,8 @@
-// Adonai — BotStatus / GeigerArea string mappings (declared in bot_state.h).
+// Nxrth — BotStatus / GeigerArea string mappings (declared in bot_state.h).
 // The BotStatus strings are matched verbatim by the UI, so keep them stable.
 #include "bot/bot_state.h"
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 const char* to_string(BotStatus s) {
     switch (s) {
@@ -29,4 +29,4 @@ const char* as_str(GeigerArea a) {
     return "red";
 }
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

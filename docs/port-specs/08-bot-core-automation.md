@@ -1,9 +1,9 @@
 # Port Spec 08 — Bot Core Automation (in-world handlers, collect, geiger, pathfind, script bridge)
 
-Source of truth for the C++ (Adonai) reimplementation of the in-world automation layer of the Rust bot (Mori).
+Source of truth for the C++ (Nxrth) reimplementation of the in-world automation layer of the Rust bot (Mori).
 Derived from: `src/bot/core.rs` (~lines 1514–1635, 1826–1927, 2286–2393, 2396–3230, 3232–4970), `src/script_channel.rs`, `src/events.rs`, `src/bot/shared.rs`, `src/player.rs`.
 
-This module owns everything that happens **after** a bot is logged in and connected: parsing world/tile/object/inventory/bux packets, tracking self + other players, auto-collecting drops, decoding Geiger signals, pathfinding/warping, and the request/reply bridge that the (now-removed) Lua layer used to drive the bot. In Adonai the Lua seam becomes a **native in-engine automation module** — this spec describes the seams precisely so native code plugs into the same points.
+This module owns everything that happens **after** a bot is logged in and connected: parsing world/tile/object/inventory/bux packets, tracking self + other players, auto-collecting drops, decoding Geiger signals, pathfinding/warping, and the request/reply bridge that the (now-removed) Lua layer used to drive the bot. In Nxrth the Lua seam becomes a **native in-engine automation module** — this spec describes the seams precisely so native code plugs into the same points.
 
 Types like `GameUpdatePacket`, `GamePacketType`, `PacketFlags`, `VariantList`, `World`/`WorldObject`/`TileType`, `Inventory`, and `BotState`/`BotDelays`/`BotCommand`/`InvSlot` are defined by the protocol / world / inventory / bot-state port specs. Here they are described **only as used**; cross-reference those specs for their exact wire/on-disk layout.
 
@@ -15,28 +15,28 @@ Apply these substitutions to every identifier, string literal, comment, file pat
 
 | From | To |
 |------|-----|
-| `Mori` | `Adonai` |
-| `mori` | `adonai` |
+| `Mori` | `Nxrth` |
+| `mori` | `nxrth` |
 | `Cloei` | `North` |
 | `cloei` | `north` |
 
 Concrete occurrences spotted in the files covered by this spec:
 
-- `src/bot/core.rs:167` — comment on `LoginMethod::Newly`: *"Original **Mori**-style GrowID login without HAR fallbacks."* → *"Original **Adonai**-style GrowID login..."*.
+- `src/bot/core.rs:167` — comment on `LoginMethod::Newly`: *"Original **Mori**-style GrowID login without HAR fallbacks."* → *"Original **Nxrth**-style GrowID login..."*.
 - No literal `Cloei`/`cloei` appears in these five files. The upstream-author rename still applies to any that surface in sibling modules (auth, server_data, constants — the user-agent and dashboard strings live there, covered by other specs).
 - The console/log tag emitted by this module is **`[Bot]`** (rewritten to `[Bot#<id>]` at log time — see `log_console`). This is *not* a "Mori" string; keep it as `[Bot]` / `[Bot#<id>]`. Do **not** invent `[Mori]`.
 - File-log/window-title/user-agent/config-filename `Mori` references are produced by `logger.rs`, the UI shell, and `constants.rs` (not in this module) — rename them there.
 
 ---
 
-## 1. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 1. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
 This module itself pulls in relatively few external crates; most of its work is pure logic over already-parsed types. Mapping for what it touches:
 
-| Rust (Mori) | Adonai C++ | Notes for this module |
+| Rust (Mori) | Nxrth C++ | Notes for this module |
 |---|---|---|
 | `crossbeam_channel` (`Sender`/`Receiver`, `unbounded`, `bounded(256)`, `try_recv`, `try_send`) | `std::mutex + std::condition_variable` bounded/unbounded queue (project's `Channel<T>`) | Used for the script request/reply/event bridge. `event_tx` is **bounded at 256** (drop-on-full via `try_send(...).ok()`); the two script channels are **unbounded**. Preserve: request/reply are 1:1 synchronous-style; events are fire-and-forget best-effort. |
-| `mlua` (Lua VM, `run_script_threaded`) | **Native C++ automation module — NO Lua in Adonai** | The Lua thread was the sole consumer of `ScriptRequest`/`ScriptReply`/`BotEventRaw`. Replace with a native automation object running on its own `std::thread`, driven by the same three queues. See §8. |
+| `mlua` (Lua VM, `run_script_threaded`) | **Native C++ automation module — NO Lua in Nxrth** | The Lua thread was the sole consumer of `ScriptRequest`/`ScriptReply`/`BotEventRaw`. Replace with a native automation object running on its own `std::thread`, driven by the same three queues. See §8. |
 | `rusty_enet` (`Host`, `Peer`, `Packet::reliable/unreliable`, `EventNoRef`) | vendored C ENet patched for SOCKS5-UDP | `send_game_packet`/`send_text`/`send_game_message` push on channel 0. `Packet::reliable` vs `Packet::unreliable` maps to ENET_PACKET_FLAG_RELIABLE / 0. |
 | `tokio::sync::broadcast::Sender<WsEvent>` (`WsTx`) | **NO web server.** In-process observer/event bus feeding Dear ImGui + the fleet shared-state manager | Every `emit(WsEvent::…)` is a UI/telemetry event. Fan-out becomes a `std::mutex`-guarded subscriber list (or direct writes into shared UI state). Keep the same event variants and fields (§4.6). |
 | `serde` / `serde_json` (`#[derive(Serialize)]` on `WsEvent`/`WsTile`/`WsObject`/`WsInvItem`) | `nlohmann/json` only where JSON is still needed (e.g. persisting/logging); UI can read structs directly | These derives exist only because events were JSON-serialized to the browser. Native ImGui reads the structs; JSON optional. |
@@ -68,8 +68,8 @@ Not used by this module (handled elsewhere): `ureq`/`reqwest`→libcurl, `scrape
 - `event_tx`/`script_req_rx`/`script_reply_tx` — the automation bridge (see §6, §8).
 - `script_stop: Arc<AtomicBool>` — interrupts the running automation.
 
-**Fleet-wide shared state (bots must be aware of each other — critical for Adonai):**
-- **Global pacing gates** are `static` singletons shared by *every* bot thread (§3). This module uses `WARP_GATE` (via `warp()`). The gate ensures the whole fleet warps in single file. Adonai must keep these as process-global statics, not per-bot.
+**Fleet-wide shared state (bots must be aware of each other — critical for Nxrth):**
+- **Global pacing gates** are `static` singletons shared by *every* bot thread (§3). This module uses `WARP_GATE` (via `warp()`). The gate ensures the whole fleet warps in single file. Nxrth must keep these as process-global statics, not per-bot.
 - `next_object_uid` lives on the per-bot `World` (not fleet-global); object UIDs are per-world, monotonically assigned client-side on each drop.
 - Auto-collect and geiger state are per-bot, but the Geiger automation (spec elsewhere) reads each bot's `state.geiger_signal` across the fleet to coordinate — so `GeigerSignal` in `BotState` is the fleet coordination surface for radiation hunting.
 
@@ -116,7 +116,7 @@ struct Socks5Config {                 // #[derive(Clone, Debug)]
 C++: `struct Socks5Config { std::string host; uint16_t port; std::optional<std::string> username, password; std::string to_url() const; };` For libcurl use the `socks5h://` scheme (remote DNS) for the login proxy per project convention.
 
 ### 4.2 `BotEventRaw` (`bot/shared.rs`)
-Raw event pushed onto the automation event queue (`event_tx`) by packet handlers; drained by the automation loop to fire registered callbacks. Was consumed by Lua's `listenEvents`; in Adonai consumed by native automation (§8).
+Raw event pushed onto the automation event queue (`event_tx`) by packet handlers; drained by the automation loop to fire registered callbacks. Was consumed by Lua's `listenEvents`; in Nxrth consumed by native automation (§8).
 ```
 enum BotEventRaw {
     VariantList { vl: VariantList, net_id: u32 },   // from every CallFunction packet
@@ -245,7 +245,7 @@ The request→reply mapping is fixed and total (§6). C++: two `std::variant`s (
 
 ### 4.6 UI event types (`events.rs`)
 
-These were `serde`-serialized to the browser. In Adonai they feed the ImGui panels + fleet manager; keep field names/semantics, drop the JSON transport.
+These were `serde`-serialized to the browser. In Nxrth they feed the ImGui panels + fleet manager; keep field names/semantics, drop the JSON transport.
 
 ```
 struct WsTile   { fg: u16, bg: u16, flags: u16, tile_type: TileType }
@@ -582,7 +582,7 @@ Substring-driven equip-state sync for the two geiger counters:
 
 ---
 
-## 8. THE LUA SEAM → NATIVE AUTOMATION (how Adonai wires in-engine automation)
+## 8. THE LUA SEAM → NATIVE AUTOMATION (how Nxrth wires in-engine automation)
 
 In Mori, the only consumer of the automation bridge was a Lua VM spawned per bot. The three seams are:
 
@@ -596,13 +596,13 @@ In Mori, the only consumer of the automation bridge was a Lua VM spawned per bot
 3. Clone shared handles (`items_dat`, `state`, `script_stop`, `username`) and **spawn a new thread** running the automation with `(req_tx, reply_rx, event_rx, items, state, stop_flag, username, content)`.
 `BotCommand::StopScript` → `script_stop = true`.
 
-**Adonai native mapping**:
+**Nxrth native mapping**:
 - Replace `run_script_threaded(...)` with a native `AutomationRunner` object on its own `std::thread`. It receives the same `(req_tx, reply_rx, event_rx, items_dat, state, stop_flag, username, <task descriptor>)`.
 - The runner reads `event_rx` to observe world/packets, and drives the bot by sending `ScriptRequest`s and awaiting `ScriptReply`s — **byte-for-byte the same protocol**, no Lua.
 - `script_stop` (atomic) is polled by the runner to abort long tasks.
 - Because requests are executed synchronously on the bot thread (which keeps ENet serviced during sleeps), the runner can treat `Walk`/`FindPath`/`Collect` as blocking calls.
 - Keep the `event_tx` bound at **256** with drop-on-full: automation that falls behind must not back-pressure the network thread.
-- The task input `content` (a Lua script string in Mori) becomes an Adonai automation task descriptor (enum/struct/graph selected in the ImGui UI). The `BotCommand::RunScript`/`StopScript` command surface stays the same shape.
+- The task input `content` (a Lua script string in Mori) becomes an Nxrth automation task descriptor (enum/struct/graph selected in the ImGui UI). The `BotCommand::RunScript`/`StopScript` command surface stays the same shape.
 
 ---
 
@@ -695,7 +695,7 @@ Grid build (shared pattern): `tiles: Vec<(fg_item_id, collision_type)>` from `wo
 
 ## 10. UI COMMAND PATH — `handle_command(BotCommand)`
 
-`cmd_rx` is the UI→bot command channel (drained each `run()` iteration). In Adonai this is the Dear ImGui control surface. Variants and effects:
+`cmd_rx` is the UI→bot command channel (drained each `run()` iteration). In Nxrth this is the Dear ImGui control surface. Variants and effects:
 
 | BotCommand | Effect |
 |---|---|

@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-namespace adonai::core {
+namespace nxrth::core {
 namespace {
 
 using nlohmann::json;
@@ -79,6 +79,52 @@ bool parse_cred_string(const std::string& value, Account& out) {
     return true;
 }
 
+std::string normalized_ltoken_key(std::string key) {
+    key = lower(trim(key));
+    key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char c) {
+                  return c == '_' || c == '-';
+              }),
+              key.end());
+    return key;
+}
+
+// Keep the full secret opaque here; the bot parser performs authoritative validation.
+bool parse_keyed_ltoken_string(const std::string& value, Account& out) {
+    const std::string raw = trim(value);
+    if (raw.empty() || raw.find('|') == std::string::npos || raw.find('\n') != std::string::npos)
+        return false;
+
+    bool has_token = false, has_rid = false, has_mac = false, has_wk = false;
+    std::string name, rid;
+    std::size_t start = 0;
+    while (start <= raw.size()) {
+        const auto bar = raw.find('|', start);
+        const std::string part = raw.substr(
+            start, bar == std::string::npos ? std::string::npos : bar - start);
+        const auto colon = part.find(':');
+        if (colon != std::string::npos) {
+            const std::string key = normalized_ltoken_key(part.substr(0, colon));
+            const std::string field_value = trim(part.substr(colon + 1));
+            if (key == "token" || key == "refreshtoken") has_token = !field_value.empty();
+            else if (key == "rid") {
+                has_rid = !field_value.empty();
+                rid = field_value;
+            } else if (key == "mac") has_mac = !field_value.empty();
+            else if (key == "wk") has_wk = !field_value.empty();
+            else if (key == "name" || key == "username") name = field_value;
+        }
+        if (bar == std::string::npos) break;
+        start = bar + 1;
+    }
+    if (!has_token || !has_rid || !has_mac || !has_wk) return false;
+
+    Account a;
+    a.username = likely_username(name) ? name : "ltoken_" + rid.substr(0, 8);
+    a.login_token = raw;
+    out = std::move(a);
+    return true;
+}
+
 void collect(const json& v, std::vector<Account>& out) {
     if (v.is_array()) {
         for (const auto& e : v) collect(e, out);
@@ -86,7 +132,9 @@ void collect(const json& v, std::vector<Account>& out) {
     }
     if (v.is_string()) {
         Account a;
-        if (parse_cred_string(v.get<std::string>(), a)) out.push_back(a);
+        const std::string value = v.get<std::string>();
+        if (parse_keyed_ltoken_string(value, a) || parse_cred_string(value, a))
+            out.push_back(a);
         return;
     }
     if (!v.is_object()) return;
@@ -110,7 +158,7 @@ std::vector<Account> parse_lines(const std::string& input) {
         const auto nl = input.find('\n', start);
         std::string line = input.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
         Account a;
-        if (parse_cred_string(line, a)) out.push_back(a);
+        if (parse_keyed_ltoken_string(line, a) || parse_cred_string(line, a)) out.push_back(a);
         if (nl == std::string::npos) break;
         start = nl + 1;
     }
@@ -120,8 +168,11 @@ std::vector<Account> parse_lines(const std::string& input) {
 std::vector<Account> dedup(std::vector<Account> in) {
     std::vector<Account> out;
     std::unordered_set<std::string> seen;
-    for (auto& a : in)
-        if (seen.insert(lower(a.username)).second) out.push_back(std::move(a));
+    for (auto& a : in) {
+        const std::string key = a.login_token.empty() ? "user:" + lower(a.username)
+                                                       : "ltoken:" + a.login_token;
+        if (seen.insert(key).second) out.push_back(std::move(a));
+    }
     return out;
 }
 
@@ -138,8 +189,8 @@ std::vector<Account> parse_account_stats(const std::string& input) {
         found = dedup(std::move(found));
         if (!found.empty()) return found;
     }
-    // Fallback: plain "user:pass" lines.
+    // Fallback: plain "user:pass" or provider-keyed ltoken lines.
     return dedup(parse_lines(text));
 }
 
-}  // namespace adonai::core
+}  // namespace nxrth::core

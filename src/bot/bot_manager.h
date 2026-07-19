@@ -1,4 +1,4 @@
-// Adonai — BotManager: the fleet supervisor (ported from Mori bot_manager.rs;
+// Nxrth — BotManager: the fleet supervisor (ported from Mori bot_manager.rs;
 // port spec 09 §1.13-§3.17 + §5).
 //
 // Owns the whole fleet. Each running bot lives on its OWN OS thread (Bot::run is
@@ -32,11 +32,11 @@
 #include <utility>
 #include <vector>
 
-#include "bot/bot.h"           // adonai::bot::{Bot, BotState, SharedBotState, CmdSender,
+#include "bot/bot.h"           // nxrth::bot::{Bot, BotState, SharedBotState, CmdSender,
                                //   BotCommand, EventSinkPtr, FleetHandle, FleetState}
-#include "proxy/proxy_pool.h"  // adonai::proxy::RotatingLoginProxy
+#include "proxy/proxy_pool.h"  // nxrth::proxy::RotatingLoginProxy
 
-namespace adonai::bot {
+namespace nxrth::bot {
 
 // §3.17 free function: proxy.map(|p| "<ip>:<port>"). The Socks5Config carried by
 // a bot already holds the RESOLVED numeric IP in `host` (proxy_pool resolves it),
@@ -73,6 +73,26 @@ struct BotInfo {
     std::optional<std::string> proxy_key;  // resolved game-proxy "ip:port", or nullopt
 };
 
+// How a bot's game connection proxy must be reconstructed when a trusted
+// local fleet backup is restored. Pool deliberately stores no selected
+// endpoint: restore asks the current ProxyPool for a fresh assignment.
+enum class ProxyPolicy { Direct, Pool, Custom };
+
+enum class LaunchCredentialKind { GrowId, Ltoken };
+
+// Secret-bearing launch intent. This is intentionally separate from BotInfo:
+// UI/MCP read models must never expose it. Only trusted local persistence code
+// should call BotManager::launch_records().
+struct LaunchRecord {
+    std::uint32_t id = 0;
+    LaunchCredentialKind credential_kind = LaunchCredentialKind::GrowId;
+    std::string credential;  // exact GrowID/mail or exact provider record
+    std::string password;    // exact password; empty for provider records
+    ProxyPolicy proxy_policy = ProxyPolicy::Direct;
+    std::optional<Socks5Config> custom_proxy;
+    bool rotating_login_requested = false;
+};
+
 // ---------------------------------------------------------------------------
 // §1.14 BotManager
 // ---------------------------------------------------------------------------
@@ -87,19 +107,18 @@ public:
     BotManager(const BotManager&) = delete;
     BotManager& operator=(const BotManager&) = delete;
 
-    // §3.3-§3.7 spawn variants. Return the bot id (an existing id on dedup hit).
-    // A `username` containing '|' is auto-detected as an ltoken (password ignored)
-    // in spawn ONLY — spawn_newly never has an ltoken branch.
+    // Spawn variants. Standard GrowID and OAuth/provider ltoken are explicit;
+    // credential strings are never auto-detected as another login method.
     std::uint32_t spawn(const std::string& username, const std::string& password,
                         std::optional<Socks5Config> proxy,
-                        std::optional<adonai::proxy::RotatingLoginProxy> login_proxy);
-    std::uint32_t spawn_newly(const std::string& username, const std::string& password,
-                              std::optional<Socks5Config> proxy,
-                              std::optional<adonai::proxy::RotatingLoginProxy> login_proxy);
-    // §3.6 — no dedup; entry username is empty (never matches find_id_by_name).
+                        std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
+                        ProxyPolicy proxy_policy = ProxyPolicy::Direct);
+    // No dedup; keyed provider records may supply the entry's display name.
     std::uint32_t spawn_ltoken(const std::string& ltoken_str,
                                std::optional<Socks5Config> proxy,
-                               std::optional<adonai::proxy::RotatingLoginProxy> login_proxy);
+                               std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy =
+                                   std::nullopt,
+                               ProxyPolicy proxy_policy = ProxyPolicy::Direct);
 
     // §3.8 — non-blocking stop: Disconnect + set atomic + park the handle in
     // retired_threads_ + emit BotRemoved immediately. Returns false if id absent.
@@ -130,12 +149,17 @@ public:
     // const: no reap (a just-stopped bot is already removed from `bots`).
     std::unordered_map<std::string, std::size_t> proxy_key_counts() const;
 
+    // Trusted persistence surface. Values contain exact credentials and proxy
+    // authentication data; never serialize them into logs or MCP responses.
+    std::vector<LaunchRecord> launch_records() const;
+    std::uint64_t launch_generation() const noexcept { return launch_generation_; }
+
     // The shared fleet registry (§5.3). Handed to every bot; also the UI's
     // bot-to-bot / proxy-occupancy source.
     const FleetHandle& fleet() const { return fleet_; }
 
     // Shared read-only item metadata (loaded once).
-    const std::shared_ptr<const adonai::world::ItemsDat>& items_dat() const { return items_dat_; }
+    const std::shared_ptr<const nxrth::world::ItemsDat>& items_dat() const { return items_dat_; }
 
     // Live bot registry, keyed by monotonic id (spec: pub). The owner already
     // serializes access to the manager, so this is a plain map.
@@ -151,9 +175,9 @@ private:
     // The factory the spawn core calls on the new thread to build the Bot. Fixed
     // signature so all five Bot::create_* variants funnel through one core.
     using BotFactory = std::function<std::unique_ptr<Bot>(
-        std::optional<Socks5Config>, std::optional<adonai::proxy::RotatingLoginProxy>,
+        std::optional<Socks5Config>, std::optional<nxrth::proxy::RotatingLoginProxy>,
         std::shared_ptr<std::atomic<bool>>, std::shared_ptr<SharedBotState>, CmdReceiver,
-        std::shared_ptr<const adonai::world::ItemsDat>, std::uint32_t, EventSinkPtr, FleetHandle)>;
+        std::shared_ptr<const nxrth::world::ItemsDat>, std::uint32_t, EventSinkPtr, FleetHandle)>;
 
     // §3.2 — the two-phase non-blocking garbage collector (called at the top of
     // nearly every public method).
@@ -165,14 +189,16 @@ private:
     std::uint32_t spawn_core(std::string entry_username, bool do_dedup,
                              const std::string& dedup_name,
                              std::optional<Socks5Config> proxy,
-                             std::optional<adonai::proxy::RotatingLoginProxy> login_proxy,
-                             BotFactory make_bot);
+                             std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy,
+                             LaunchRecord launch_record, BotFactory make_bot);
 
     std::uint32_t next_id_ = 0;                       // monotonic, never reused
     std::vector<RetiredThread> retired_threads_;      // awaiting non-blocking join
-    std::shared_ptr<const adonai::world::ItemsDat> items_dat_;  // loaded once
+    std::shared_ptr<const nxrth::world::ItemsDat> items_dat_;  // loaded once
     EventSinkPtr sink_;                               // ws_tx -> in-process UI notifier
     FleetHandle fleet_;                               // shared fleet registry
+    std::unordered_map<std::uint32_t, LaunchRecord> launch_records_;
+    std::uint64_t launch_generation_ = 0;
 };
 
-}  // namespace adonai::bot
+}  // namespace nxrth::bot

@@ -1,8 +1,8 @@
-# Adonai Port Spec — Module 02: Constants & Data
+# Nxrth Port Spec — Module 02: Constants & Data
 
 **Source (Mori / Rust):** `constants.rs`, `items.rs`, `save_dat.rs`, `inventory.rs`, `account_devices.rs`
 **Shared dependency also specified here:** `cursor.rs` (the byte reader every binary parser in this module uses).
-**Target (Adonai / C++):** reimplement without reading the Rust. This document is the single source of truth.
+**Target (Nxrth / C++):** reimplement without reading the Rust. This document is the single source of truth.
 
 > **Endianness:** every multi-byte integer/float in this module is **little-endian** (matches Growtopia's wire/disk format and x86). Do not use host-order helpers that could differ on big-endian.
 
@@ -12,19 +12,19 @@
 
 Global project rename conventions:
 
-- `Mori` / `mori` → `Adonai` / `adonai` (identifiers, file paths, log prefixes, window titles, user-agents, config filenames).
+- `Mori` / `mori` → `Nxrth` / `nxrth` (identifiers, file paths, log prefixes, window titles, user-agents, config filenames).
 - `Cloei` / `cloei` (upstream author/repo) → `North` / `north`.
 
 **Concrete occurrences inside THIS module:** none of the five source files (nor `cursor.rs`) contain the literal strings `Mori`, `mori`, `Cloei`, or `cloei`. What the rename touches here is indirect:
 
 | Rust artifact | Nature | Port action |
 |---|---|---|
-| `crate::cursor::Cursor` | internal module path of the `mori` crate | becomes `adonai::Cursor` (or `adonai/cursor.hpp`) |
-| `crate::constants::{...}` | internal module path | becomes `adonai::constants::…` |
-| Log line `"[Items] Loaded {} items"` | runtime log | keep `[Items]` prefix (not a Mori token); if Adonai standardizes a global log tag, apply it here |
+| `crate::cursor::Cursor` | internal module path of the `mori` crate | becomes `nxrth::Cursor` (or `nxrth/cursor.hpp`) |
+| `crate::constants::{...}` | internal module path | becomes `nxrth::constants::…` |
+| Log line `"[Items] Loaded {} items"` | runtime log | keep `[Items]` prefix (not a Mori token); if Nxrth standardizes a global log tag, apply it here |
 | Log line `"[Items] Failed to load items.dat: {e} — pathfinding will be inaccurate"` | runtime log | same |
 | `items.dat`, `save.dat` filenames | **Growtopia's own** data files | **DO NOT rename** — the game defines these names |
-| `data/account_devices.json` | Mori-authored on-disk store | keep name (contains no "mori" token); path may move under an Adonai data dir if the project standardizes one |
+| `data/account_devices.json` | Mori-authored on-disk store | keep name (contains no "mori" token); path may move under an Nxrth data dir if the project standardizes one |
 
 No user-agent, window title, or `Cloei` string lives in this module — those belong to other modules.
 
@@ -32,7 +32,7 @@ No user-agent, window title, or `Cloei` string lives in this module — those be
 
 ## 1. `cursor.rs` — the byte reader (foundational)
 
-Every parser below is driven by this cursor. Port it first as e.g. `adonai::Cursor`.
+Every parser below is driven by this cursor. Port it first as e.g. `nxrth::Cursor`.
 
 ### State
 ```
@@ -69,7 +69,7 @@ label : const char*     (a static tag used only in error messages, e.g. "items.d
 
 ## 2. `constants.rs` — verbatim constants
 
-These are compile-time constants. Reproduce **exactly** (values are load-bearing for login/protocol handshakes elsewhere). Suggested C++: `constexpr` for scalars, `inline constexpr std::string_view` (or `const char*`) for strings, in `namespace adonai::constants`.
+These are compile-time constants. Reproduce **exactly** (values are load-bearing for login/protocol handshakes elsewhere). Suggested C++: `constexpr` for scalars, `inline constexpr std::string_view` (or `const char*`) for strings, in `namespace nxrth::constants`.
 
 | Rust name | Type | Value (verbatim) |
 |---|---|---|
@@ -560,7 +560,7 @@ Returns `true` if the store was modified/written, `false` otherwise.
 
 **Design intent to preserve:** a login token carrying only the shared DEFAULT device must never stamp every account with the same `rid/mac/wk` (all bots looking like one device is a ban vector). Real device fields from a token are imported; when they change, the derived hash triple is invalidated back to defaults.
 
-### 6.6 Threading & fleet-wide shared state (important for Adonai)
+### 6.6 Threading & fleet-wide shared state (important for Nxrth)
 - The account-device store is **shared by the entire fleet**: all bots read/write the one `data/account_devices.json` under the single global `STORE_LOCK`. This is exactly the "bots must be aware of each other" concern — device identities are coordinated so no two accounts collide on `rid/mac/wk`, and each account keeps a stable identity across runs.
 - **C++ port:** implement as a singleton/service with a `std::mutex` guarding an atomic read-modify-write of the JSON file (via `nlohmann/json`). Consider caching the parsed store in memory behind the same mutex to avoid re-reading the file on every call, but keep write-through to disk so a crash doesn't lose identities. Keys are always the trimmed-lowercased username.
 - No async; all calls are synchronous and short. Safe to call from any bot thread.
@@ -579,11 +579,11 @@ Returns `true` if the store was modified/written, `false` otherwise.
 
 ---
 
-## 8. Dependency mapping (Rust crate → Adonai C++)
+## 8. Dependency mapping (Rust crate → Nxrth C++)
 
 Only these crates appear in this module. (mlua, ureq/reqwest, rusty_enet, md5, argon2, scraper, tokio/axum/tower, crossbeam-channel are **not** used here — no action needed for them in this module.)
 
-| Rust | Used for | Adonai C++ |
+| Rust | Used for | Nxrth C++ |
 |---|---|---|
 | `anyhow::{Result, bail}` | error propagation in parsers | pick one project-wide error strategy: exceptions (`throw std::runtime_error(msg)`) **or** an `Expected<T>` / `tl::expected` / status-return. Preserve the exact error message strings (`"{label} truncated at offset {pos} (need {n} more bytes)"`, `"unexpected magic: {magic}"`, `"unknown variant type {t} for key {k}"`). |
 | `serde` / `serde_json` (account_devices) | JSON (de)serialize of the device store | **nlohmann/json**. `to_string_pretty` → `dump(indent)`. Tolerant read (bad JSON → empty store). |
@@ -593,7 +593,7 @@ Only these crates appear in this module. (mlua, ureq/reqwest, rusty_enet, md5, a
 | `std::collections::BTreeMap` (device store) | ordered `key -> device` | `std::map<std::string, AccountDevice>` (ordered → stable JSON output) |
 | `std::sync::{Mutex, OnceLock}` | global store lock | `std::mutex` + Meyers singleton (`static std::mutex` in a function) / `std::call_once` |
 | `std::fs` / `std::path` | file read/write, dir create | `<fstream>` + `<filesystem>` (`std::filesystem::create_directories`) |
-| `crate::cursor::Cursor` | byte reader | port as `adonai::Cursor` (§1) |
+| `crate::cursor::Cursor` | byte reader | port as `nxrth::Cursor` (§1) |
 
 **No Lua, no HTTP, no ENet, no channels, no web server** are involved in this module.
 

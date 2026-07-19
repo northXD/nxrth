@@ -1,4 +1,4 @@
-// Adonai — BotHost (thin wrapper over vendored C ENet) + SOCKS5 relay registry.
+// Nxrth — BotHost (thin wrapper over vendored C ENet) + SOCKS5 relay registry.
 #include "net/enet_host.h"
 
 #include <chrono>
@@ -10,11 +10,11 @@
 
 #include "core/logger.h"
 
-#ifdef ADONAI_HAVE_ENET
+#ifdef NXRTH_HAVE_ENET
 #include <enet/enet.h>
 #endif
 
-namespace adonai::net {
+namespace nxrth::net {
 
 // ---------------------------------------------------------------------------
 // SOCKS5 relay registry (always compiled — the ENet patch links against it)
@@ -37,12 +37,12 @@ std::map<std::intptr_t, RelayEntry>& registry() {
     return r;
 }
 
-// Build "socks5://[user:pass@]host:port" for the operator log (matches Mori's
-// Socks5Config::to_url — unredacted, this is a local log).
+// Build a credential-safe endpoint label. Logs are exposed through MCP and the
+// desktop console, so proxy userinfo must never enter the shared logger.
 std::string proxy_to_url(const Socks5Config& p) {
     std::string s = "socks5://";
     if (p.username && p.password) {
-        s += *p.username + ":" + *p.password + "@";
+        s += "***:***@";
     }
     s += p.host + ":" + std::to_string(p.port);
     return s;
@@ -68,7 +68,7 @@ void socks5_relay_unregister(std::intptr_t socket_handle) {
     registry().erase(socket_handle);
 }
 
-extern "C" int adonai_socks5_relay_for(std::intptr_t socket_handle,
+extern "C" int nxrth_socks5_relay_for(std::intptr_t socket_handle,
                                        struct sockaddr_storage* out_addr,
                                        int* out_len) {
     std::lock_guard<std::mutex> lk(registry_mutex());
@@ -79,7 +79,7 @@ extern "C" int adonai_socks5_relay_for(std::intptr_t socket_handle,
     return 1;
 }
 
-extern "C" int adonai_socks5_build_header(const struct sockaddr* target,
+extern "C" int nxrth_socks5_build_header(const struct sockaddr* target,
                                           unsigned char* out, int cap) {
     if (!target || !out || cap < 0) return -1;
     std::vector<std::uint8_t> hdr = Socks5UdpSocket::create_udp_header(target);
@@ -88,7 +88,7 @@ extern "C" int adonai_socks5_build_header(const struct sockaddr* target,
     return static_cast<int>(hdr.size());
 }
 
-extern "C" int adonai_socks5_parse_header(const unsigned char* data, int len,
+extern "C" int nxrth_socks5_parse_header(const unsigned char* data, int len,
                                           struct sockaddr_storage* src,
                                           int* src_len, int* payload_off) {
     if (!data || len < 0) return -1;
@@ -138,7 +138,7 @@ BotHost& BotHost::operator=(BotHost&& o) noexcept {
 
 BotHost::~BotHost() { destroy(); }
 
-#ifdef ADONAI_HAVE_ENET
+#ifdef NXRTH_HAVE_ENET
 
 namespace {
 
@@ -152,7 +152,7 @@ void ensure_enet() {
 void configure_host(ENetHost* host) {
     enet_host_compress_with_range_coder(host);
     host->checksum = enet_crc32;
-#if defined(ADONAI_ENET_HAS_NEW_PACKET)
+#if defined(NXRTH_ENET_HAS_NEW_PACKET)
     host->usingNewPacket = 1;  // GT 5.x framing; provided by the vendored fork
 #endif
 }
@@ -172,7 +172,7 @@ BotHost BotHost::create(const Socks5Config* proxy) {
     BotHost self;
 
     if (proxy) {
-        adonai::log("[Bot] Connecting via proxy " + proxy_to_url(*proxy));
+        nxrth::log("[Bot] Connecting via proxy " + proxy_to_url(*proxy));
 
         // 0..4: up to 4 SOCKS5 UDP-ASSOCIATE attempts, 300 ms apart.
         for (int attempt = 0; attempt < kSocks5BindMaxAttempts; ++attempt) {
@@ -207,7 +207,7 @@ BotHost BotHost::create(const Socks5Config* proxy) {
         // the operator's real IP). Bind a dead 127.0.0.1:0 socket — the follow-up
         // connect to a public game server physically cannot leave a loopback-bound
         // socket, so it fails and the run loop retries with a fresh proxy.
-        adonai::log("[Bot] Proxy UDP bind failed after retries — NOT falling back "
+        nxrth::log("[Bot] Proxy UDP bind failed after retries — NOT falling back "
                     "to direct (would leak real IP); will retry with a fresh proxy");
         ENetAddress bind = make_bind_addr(htonl(INADDR_LOOPBACK), 0);
         ENetHost* host = enet_host_create(&bind, kHostPeerLimit,
@@ -305,15 +305,15 @@ bool BotHost::connect(const sockaddr* addr, socklen_t addr_len,
         ea.host = in->sin_addr.s_addr;        // network order
         ea.port = ntohs(in->sin_port);        // ENet wants host order
     } else {
-        adonai::log("[Bot] connect: unsupported address family — attempt failed");
+        nxrth::log("[Bot] connect: unsupported address family — attempt failed");
         return false;
     }
 
     ENetPeer* peer = enet_host_connect(host, &ea, channel_count, data);
     if (!peer) {
-        // Mori `.expect("connect failed")` panics; Adonai treats it as a failed
+        // Mori `.expect("connect failed")` panics; Nxrth treats it as a failed
         // attempt so the run loop can retry (never abort the process).
-        adonai::log("[Bot] connect failed (no free peer) — will retry");
+        nxrth::log("[Bot] connect failed (no free peer) — will retry");
         return false;
     }
     peer_ = reinterpret_cast<_ENetPeer*>(peer);
@@ -352,13 +352,13 @@ void BotHost::peer_set_timeout(PeerId peer, std::uint32_t limit,
     enet_peer_timeout(reinterpret_cast<ENetPeer*>(p), limit, minimum, maximum);
 }
 
-#else  // !ADONAI_HAVE_ENET — inert build so this unit compiles before vendoring.
+#else  // !NXRTH_HAVE_ENET — inert build so this unit compiles before vendoring.
 
 BotHost BotHost::create(const Socks5Config* proxy) {
     if (proxy) {
-        adonai::log("[Bot] Connecting via proxy " + proxy_to_url(*proxy));
+        nxrth::log("[Bot] Connecting via proxy " + proxy_to_url(*proxy));
     }
-    adonai::log("[Bot] ENet not vendored (ADONAI_HAVE_ENET undefined) — "
+    nxrth::log("[Bot] ENet not vendored (NXRTH_HAVE_ENET undefined) — "
                 "host is inert");
     return BotHost{};
 }
@@ -379,6 +379,6 @@ void BotHost::peer_send(PeerId, std::uint8_t, const std::uint8_t*, std::size_t, 
 void BotHost::peer_disconnect(PeerId, std::uint32_t) {}
 void BotHost::peer_set_timeout(PeerId, std::uint32_t, std::uint32_t, std::uint32_t) {}
 
-#endif  // ADONAI_HAVE_ENET
+#endif  // NXRTH_HAVE_ENET
 
-}  // namespace adonai::net
+}  // namespace nxrth::net

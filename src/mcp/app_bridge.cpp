@@ -15,10 +15,10 @@
 
 #include "mcp/mcp_server.h"
 
-namespace adonai::mcp {
+namespace nxrth::mcp {
 namespace {
 
-constexpr wchar_t kPipeName[] = LR"(\\.\pipe\Adonai.AppMcp.v1)";
+constexpr wchar_t kPipeName[] = LR"(\\.\pipe\Nxrth.AppMcp.v1)";
 constexpr std::size_t kMaxMessageBytes = 64u * 1024u * 1024u;
 
 class Handle {
@@ -98,8 +98,8 @@ struct AppMcpBridgeServer::Impl {
         std::promise<std::optional<nlohmann::json>> completion;
     };
 
-    Impl(adonai::bot::BotManager& manager, adonai::proxy::ProxyPool& proxy_pool)
-        : server(manager, proxy_pool), thread([this] { serve(); }) {}
+    Impl(nxrth::bot::BotManager& manager, nxrth::proxy::ProxyPool& proxy_pool)
+        : server(manager, proxy_pool, true), thread([this] { serve(); }) {}
 
     ~Impl() { stop(); }
 
@@ -212,8 +212,8 @@ struct AppMcpBridgeServer::Impl {
     std::thread thread;
 };
 
-AppMcpBridgeServer::AppMcpBridgeServer(adonai::bot::BotManager& manager,
-                                       adonai::proxy::ProxyPool& proxy_pool)
+AppMcpBridgeServer::AppMcpBridgeServer(nxrth::bot::BotManager& manager,
+                                       nxrth::proxy::ProxyPool& proxy_pool)
     : impl_(std::make_unique<Impl>(manager, proxy_pool)) {}
 
 AppMcpBridgeServer::~AppMcpBridgeServer() = default;
@@ -264,4 +264,4 @@ bool forward_request_to_app(const nlohmann::json& request,
     return true;
 }
 
-}  // namespace adonai::mcp
+}  // namespace nxrth::mcp

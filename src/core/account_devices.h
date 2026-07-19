@@ -1,4 +1,4 @@
-// Adonai — per-account device identity store (FLEET-WIDE, process-global).
+// Nxrth — per-account device identity store (FLEET-WIDE, process-global).
 // Ported from Mori/account_devices.rs. Persists a stable, unique device identity
 // (rid/mac/wk + hash/hash2/zf) per account into data/account_devices.json so that
 // every bot in the fleet presents as a distinct device. All access serializes on
@@ -8,7 +8,7 @@
 #include <optional>
 #include <string>
 
-namespace adonai::account_devices {
+namespace nxrth::account_devices {
 
 // One account's device identity (serde JSON <-> struct in the Rust original).
 struct AccountDevice {
@@ -43,4 +43,4 @@ std::optional<AccountDevice> get_or_create(const std::string& username);
 bool upsert_from_login_token(const std::string& username,
                              const std::string& login_token);
 
-}  // namespace adonai::account_devices
+}  // namespace nxrth::account_devices

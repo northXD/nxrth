@@ -1,7 +1,7 @@
-# Adonai Port Spec — Module `10-world`
+# Nxrth Port Spec — Module `10-world`
 
 **Source (Rust, Mori 2.0.0):** `src/world/mod_impl.rs`, `src/world/constants.rs`, `src/astar.rs`, `src/cursor.rs`
-**Target:** C++ (project "Adonai"). This document is the single source of truth. A C++ engineer must be able to reimplement the module from this spec **without** reading the Rust.
+**Target:** C++ (project "Nxrth"). This document is the single source of truth. A C++ engineer must be able to reimplement the module from this spec **without** reading the Rust.
 
 Scope of this module:
 - Byte-level parser for the world map blob delivered in the `SendMapData` game packet.
@@ -19,27 +19,27 @@ Everything on the wire is **little-endian** (GT is LE). Strings are UTF-8, decod
 
 Apply these identifier/string substitutions when porting. They do not affect wire format or protocol constants — only project-owned names.
 
-| Rust (Mori) | C++ (Adonai) |
+| Rust (Mori) | C++ (Nxrth) |
 |---|---|
-| `Mori` / `mori` (any identifier, path, log tag, window title, user-agent, config file) | `Adonai` / `adonai` |
+| `Mori` / `mori` (any identifier, path, log tag, window title, user-agent, config file) | `Nxrth` / `nxrth` |
 | `Cloei` / `cloei` (upstream author/repo) | `North` / `north` |
 
 Concrete occurrences spotted **in these four files**:
 - `mod_impl.rs` log lines use the tag **`[world]`** (not "mori"), and the World-parse debug tests reference **`world.dat`**. No literal "Mori"/"Cloei" tokens appear inside these four files. Keep the `[world]` tag but note that the *caller* (`bot/core.rs`) logs with `[Bot]` — those `[Bot]` lines belong to another module.
-- The two `eprintln!` diagnostics in `mod_impl.rs` (`"[world] tile {idx} ... failed"` and `"[world] WARNING: unknown TileExtraData kind ..."`) should keep a stable, greppable tag; in Adonai use `[world]` (lowercase, unchanged) or your chosen logger category — do **not** introduce a "mori"/"cloei" token.
+- The two `eprintln!` diagnostics in `mod_impl.rs` (`"[world] tile {idx} ... failed"` and `"[world] WARNING: unknown TileExtraData kind ..."`) should keep a stable, greppable tag; in Nxrth use `[world]` (lowercase, unchanged) or your chosen logger category — do **not** introduce a "mori"/"cloei" token.
 - No URLs, user-agents, or config filenames live in this module. If your porting pass touches sibling modules, the branded strings (window title "Mori", UA, `mori_*.json`/`mori_debug.log`, dashboard "Cloei") are handled there; this module contributes none.
 
 ---
 
-## 1. Dependency mapping (Rust crate → Adonai C++)
+## 1. Dependency mapping (Rust crate → Nxrth C++)
 
 This module uses very few crates:
 
-| Rust crate / feature | Used for | Adonai C++ replacement |
+| Rust crate / feature | Used for | Nxrth C++ replacement |
 |---|---|---|
 | `anyhow::{Result, bail}` | error propagation from the cursor/parser | Return `std::optional<T>` / `bool` + out-param, or throw a `std::runtime_error`/custom `ParseError`. Recommended: an exception-free style — parse functions return `bool` and write into an out struct; a truncation sets a "failed" flag. Preserve the **error messages** (e.g. `"<label> truncated at offset <pos> (need <n> more bytes)"`) as log strings. |
 | `bitflags::bitflags!` (`TileFlags: u16`) | typed bitset over a `u16` | Plain `uint16_t` + `enum class TileFlag : uint16_t { ... }` constants and `(flags_raw & TileFlag::X) != 0` tests. `from_bits_retain` semantics = "keep all bits, including undefined ones" → just store the raw `uint16_t` and mask when querying. |
-| `serde::Serialize` on `TileType` (`#[serde(tag = "type")]`) | JSON emission of tiles to the (removed) web UI | Adonai has **no web server**. If tile state must be surfaced to the Dear ImGui UI or persisted, use `nlohmann/json` and emit a `{"type": "<VariantName>", ...fields}` object (adjacently-**internally** tagged: a `"type"` string field sits alongside the variant's fields at the same object level). Only needed if you keep the UI mirror; the parser itself needs no JSON. |
+| `serde::Serialize` on `TileType` (`#[serde(tag = "type")]`) | JSON emission of tiles to the (removed) web UI | Nxrth has **no web server**. If tile state must be surfaced to the Dear ImGui UI or persisted, use `nlohmann/json` and emit a `{"type": "<VariantName>", ...fields}` object (adjacently-**internally** tagged: a `"type"` string field sits alongside the variant's fields at the same object level). Only needed if you keep the UI mirror; the parser itself needs no JSON. |
 | `std::collections::{BinaryHeap, HashMap, HashSet}` (A*) | open list / came-from / g-scores / closed set / path cache | `std::priority_queue` (with a comparator giving a **min-heap on f, tie-break min-heap on h**), `std::unordered_map`, `std::unordered_set`. Key types are `(u32,u32)` and `(u32,u32,u32,u32,bool)` tuples — provide a hash (e.g. pack into `uint64_t` for the 2-tuple; a small struct + custom hash for the 5-tuple). |
 | `std::fs` (test only) | reads `world.dat` in a `#[cfg(test)]` unit test | Not shipped. Port as an optional dev fixture reader if desired. |
 
@@ -86,7 +86,7 @@ All multi-byte reads are **little-endian**. Every read first calls `need(n)`; on
 
 "UTF-8 lossy" = never fail on bad bytes; replace each invalid sequence with U+FFFD (`std::string` holding the replacement bytes `EF BF BD`).
 
-**C++ note:** implement `LE_u16`/`LE_u32`/`LE_i32`/`LE_f32` by `memcpy` into the target type (do **not** cast the pointer — avoids alignment UB). On a little-endian host that is already correct byte order; if you ever target BE, byte-swap. GT/Adonai targets are LE.
+**C++ note:** implement `LE_u16`/`LE_u32`/`LE_i32`/`LE_f32` by `memcpy` into the target type (do **not** cast the pointer — avoids alignment UB). On a little-endian host that is already correct byte order; if you ever target BE, byte-swap. GT/Nxrth targets are LE.
 
 ---
 
@@ -411,7 +411,7 @@ Field order on the wire is exactly: fg, bg, parent_block, flags, [parent-u16 if 
 
 ### 6.4 CBOR note
 
-The parser never *decodes* CBOR — it only reads a `u32` length and skips that many bytes. Adonai should do the same (skip). The 21 ids are in `CBOR_TILE_IDS` (§3).
+The parser never *decodes* CBOR — it only reads a `u32` length and skips that many bytes. Nxrth should do the same (skip). The 21 ids are in `CBOR_TILE_IDS` (§3).
 
 ### 6.5 `parse_tile_extra(cur, kind, fg_item_id)` — extra-data dispatch
 
@@ -566,20 +566,20 @@ Only the `Seed` extra-kind is decoded here (the general dispatch of §6.5 is **n
 
 ## 8. Threading & shared state
 
-**Per-bot ownership.** Each bot runs on its own OS thread (in Adonai: `std::thread`). The `World`, the `AStar` instance, and all parsing live **inside** the bot's core object and are touched only by that bot's thread. There is **no** cross-bot sharing of the `World`/`AStar` themselves. Relevant fields on the bot core (`bot/core.rs`):
+**Per-bot ownership.** Each bot runs on its own OS thread (in Nxrth: `std::thread`). The `World`, the `AStar` instance, and all parsing live **inside** the bot's core object and are touched only by that bot's thread. There is **no** cross-bot sharing of the `World`/`AStar` themselves. Relevant fields on the bot core (`bot/core.rs`):
 
 ```
 world: Option<World>      // set on SendMapData (World::parse); mutated by tile/object updates
 astar: AStar              // reused across find_path calls; rebuilt from tiles each pathfind
 ```
 
-**Lifecycle on `SendMapData`:** clear players/local-player state, then `World::parse(extra_data)`. On success, `self.world = Some(world)`, and a **snapshot** is copied under a write-lock into a shared `state` (an `RwLock`-guarded struct) that the UI reads: `world_name`, `world_width`, `world_height`, a `Vec<TileInfo>` (fg, bg, flags, tile_type clone), a `Vec<WorldObjectInfo>` (uid, item_id, x, y, count), status → `InGame`. In Adonai this shared mirror is what the Dear ImGui UI thread reads; guard it with a `std::mutex` (or `std::shared_mutex`) — the Rust `RwLock` uses `unwrap_or_else(PoisonError::into_inner)` (i.e. it ignores lock poisoning), so a plain mutex is a faithful port.
+**Lifecycle on `SendMapData`:** clear players/local-player state, then `World::parse(extra_data)`. On success, `self.world = Some(world)`, and a **snapshot** is copied under a write-lock into a shared `state` (an `RwLock`-guarded struct) that the UI reads: `world_name`, `world_width`, `world_height`, a `Vec<TileInfo>` (fg, bg, flags, tile_type clone), a `Vec<WorldObjectInfo>` (uid, item_id, x, y, count), status → `InGame`. In Nxrth this shared mirror is what the Dear ImGui UI thread reads; guard it with a `std::mutex` (or `std::shared_mutex`) — the Rust `RwLock` uses `unwrap_or_else(PoisonError::into_inner)` (i.e. it ignores lock poisoning), so a plain mutex is a faithful port.
 
 **Object add/remove** (dropped items) mutate `world.objects` and bump `world.next_object_uid` (`next_uid = world.next_object_uid; world.next_object_uid += 1;`) — single-threaded within the bot, no atomics needed.
 
 **AStar rebuild is per-call.** Before each pathfind the bot rebuilds the collision grid from the current tiles (see §9.2) and calls `astar.update_from_tiles(...)`. `update_from_tiles`/`update_from_collision_data` clear the path cache when the grid content changes (and reset dimensions when width/height change). This is all single-threaded per bot.
 
-**Fleet-wide shared state (Adonai requirement).** In Mori bots do **not** see each other's worlds. For Adonai's "bots aware of each other" goal, the natural extension is a fleet registry keyed by world name: each bot, after a successful `World::parse`, could publish `{bot_id, world_name, pos}` into a shared, mutex-guarded fleet map so other bots in the *same* world can coordinate. The per-bot `World`/`AStar` should stay thread-local (they are large and mutated constantly); share only lightweight summaries (world name, tile deltas, positions) through your `std::mutex`+`std::condition_variable` queue (the crossbeam-channel replacement). Do **not** share the `AStar.path_cache` across bots — it is keyed by `(from,to,has_access)` specific to one bot's grid.
+**Fleet-wide shared state (Nxrth requirement).** In Mori bots do **not** see each other's worlds. For Nxrth's "bots aware of each other" goal, the natural extension is a fleet registry keyed by world name: each bot, after a successful `World::parse`, could publish `{bot_id, world_name, pos}` into a shared, mutex-guarded fleet map so other bots in the *same* world can coordinate. The per-bot `World`/`AStar` should stay thread-local (they are large and mutated constantly); share only lightweight summaries (world name, tile deltas, positions) through your `std::mutex`+`std::condition_variable` queue (the crossbeam-channel replacement). Do **not** share the `AStar.path_cache` across bots — it is keyed by `(from,to,has_access)` specific to one bot's grid.
 
 ---
 
@@ -609,7 +609,7 @@ collision_type(tile) =
         if not found: (tile.fg_item_id == 0 ? 0 : 1)         // unknown non-empty block = solid
 ```
 
-- `collision_type` originates from the **items database** (`items.dat`): it is `u8` field at a fixed position in each item record (read as `render_type, is_stripey_wallpaper, collision_type, block_health, ...`). Adonai's items module owns this; the world module just consumes `item.collision_type`.
+- `collision_type` originates from the **items database** (`items.dat`): it is `u8` field at a fixed position in each item record (read as `render_type, is_stripey_wallpaper, collision_type, block_health, ...`). Nxrth's items module owns this; the world module just consumes `item.collision_type`.
 - **Note the two grid-build variants in the source:** the item-collection path maps `Lock → 3` **and** `Door → 0`; the general `find_path` path maps only `Door → 0` and lets `Lock` fall through to the items-db lookup. Preserve both behaviors where you port those two call sites. (The `Lock → 3` mapping combined with `is_blocked`'s `ct==3 → !has_access` means locked areas are walkable only when the bot has access.)
 
 ### 9.3 `has_access()` (drives the `has_access` A* parameter)

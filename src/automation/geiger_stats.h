@@ -1,4 +1,4 @@
-// Adonai - process-global geiger farm aggregate (port of Mori's geiger_stats.rs).
+// Nxrth - process-global geiger farm aggregate (port of Mori's geiger_stats.rs).
 //
 // Every bot runs its own GeigerModule instance, so per-module tallies only reflect
 // one bot. This shared, thread-safe store accumulates FLEET-WIDE totals (per-item
@@ -12,7 +12,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace adonai::automation {
+namespace nxrth::automation {
 
 struct GeigerAgg {
     std::unordered_map<std::uint16_t, std::uint64_t> counts;  // item id -> fleet total
@@ -31,4 +31,4 @@ std::string geiger_webhook_message_id(const std::string& url);
 void set_geiger_webhook_message_id(const std::string& url, const std::string& id);
 void clear_geiger_webhook_message_id(const std::string& url);
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

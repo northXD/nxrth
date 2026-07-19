@@ -1,4 +1,4 @@
-// Adonai — CoordinateModule + shared claim helpers (see coordinate.h).
+// Nxrth — CoordinateModule + shared claim helpers (see coordinate.h).
 #include "automation/modules/coordinate.h"
 
 #include <algorithm>
@@ -6,7 +6,7 @@
 
 #include "core/logger.h"
 
-namespace adonai::automation {
+namespace nxrth::automation {
 
 namespace {
 
@@ -64,11 +64,11 @@ std::string world_claim_key(std::string_view world) {
     return k;
 }
 
-bool claim_target(adonai::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id) {
+bool claim_target(nxrth::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id) {
     return fleet.claim(key, bot_id);
 }
 
-void release_target(adonai::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id) {
+void release_target(nxrth::bot::FleetState& fleet, const std::string& key, std::uint32_t bot_id) {
     fleet.release(key, bot_id);
 }
 
@@ -96,9 +96,9 @@ std::vector<WorldTarget> parse_world_list(const std::string& csv) {
     return out;
 }
 
-void CoordinateModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetState& fleet) {
-    const adonai::bot::AutomationConfig cfg = fleet.config_snapshot();
-    const std::vector<WorldTarget> targets = parse_world_list(cfg.param("coordinate_worlds"));
+void CoordinateModule::tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fleet,
+                            const nxrth::bot::AutomationConfig& config) {
+    const std::vector<WorldTarget> targets = parse_world_list(config.param("coordinate_worlds"));
     if (targets.empty()) return;
 
     const std::uint32_t id = self.bot_id();
@@ -136,7 +136,7 @@ void CoordinateModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetSta
         const auto now = std::chrono::steady_clock::now();
         if (now - last_warp_ < kWarpCooldown) return;  // don't spam the warp gate
         last_warp_ = now;
-        adonai::log("[coordinate] bot " + std::to_string(id) + " -> " + t.world,
+        nxrth::log("[coordinate] bot " + std::to_string(id) + " -> " + t.world,
                     static_cast<int>(id));
         self.warp(t.world, t.door);
         return;
@@ -144,4 +144,4 @@ void CoordinateModule::tick(adonai::bot::BotContext& self, adonai::bot::FleetSta
     // Nothing claimable this tick: every target is owned by other bots. Hold.
 }
 
-}  // namespace adonai::automation
+}  // namespace nxrth::automation

@@ -1,4 +1,4 @@
-// Adonai — GT wire framing + tank/GameUpdatePacket codec
+// Nxrth — GT wire framing + tank/GameUpdatePacket codec
 // (ported from Mori/protocol/packet.rs). GT is little-endian throughout.
 #pragma once
 #include <cstddef>
@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace adonai::protocol {
+namespace nxrth::protocol {
 
 // --- §1 Outer ENet message types (4-byte LE u32 prefix on every payload) ------
 inline constexpr std::uint32_t MSG_SERVER_HELLO = 1;
@@ -170,4 +170,4 @@ struct IncomingPacket {
     static std::optional<IncomingPacket> parse(std::span<const std::uint8_t> data);
 };
 
-}  // namespace adonai::protocol
+}  // namespace nxrth::protocol

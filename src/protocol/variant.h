@@ -1,4 +1,4 @@
-// Adonai — VariantList / Variant codec (ported from Mori/protocol/variant.rs).
+// Nxrth — VariantList / Variant codec (ported from Mori/protocol/variant.rs).
 // The VariantList is the serialized argument list carried in the extra_data of a
 // CallFunction (0x01) GameUpdatePacket. This module only DESERIALIZES; outgoing
 // VariantList building lives elsewhere. GT is little-endian throughout.
@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-namespace adonai::protocol {
+namespace nxrth::protocol {
 
 struct Vec2 {
     float x{};
@@ -65,4 +65,4 @@ struct VariantList {
     std::size_t size() const { return variants.size(); }
 };
 
-}  // namespace adonai::protocol
+}  // namespace nxrth::protocol

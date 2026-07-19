@@ -1,53 +1,66 @@
-# Adonai
+# Nxrth
 
-Native C++ Growtopia fleet client — a ground-up recode of the Rust "Mori"
-framework. Dear ImGui + DirectX 11 UI (Tahoma), vendored ENet (patched for
-SOCKS5-UDP), and **in-engine, fleet-aware automation** (no per-bot Lua VMs — every
-bot shares one `FleetState`, so bots coordinate and see each other).
+A native **C++ Growtopia fleet client** — run and coordinate many bots from one
+Dear ImGui desktop app, with in-engine automation, proxy support, a sandboxed Lua
+executor, and a built-in AI operator.
 
-Upstream lineage is credited to **North** (formerly the "Cloei" fork).
+**Discord: [discord.gg/nxrth](https://discord.gg/nxrth)**
+
+---
+
+## Features
+
+- **Multi-account fleet** — spawn and manage many bots at once, each on its own worker.
+- **Login methods** (see below) — GrowID/Mail, Google OAuth ltokens, and provider gateway tokens.
+- **Proxies** — SOCKS5 game pool (per-bot exit, capacity-limited) + a rotating "logon bypass" pool (one clean IP per login).
+- **AutoGeiger / geiger farming** — fleet-aware geiger hunting, digging, depositing, and pickup.
+- **Lua 5.4 executor** — sandboxed scripting over the bot + automation API, run fleet-wide or per bot.
+- **Built-in AI operator** — drive the app in natural language (OpenAI, Anthropic, Gemini, and more).
+- **Items database** — built-in `items.dat` viewer.
+
+## Login methods
+
+Nxrth accepts several credential formats (paste a full record or fill the fields
+in **Add Bot**):
+
+- **GrowID / Mail + password** — the classic dashboard login.
+- **Google OAuth `ltoken`** — `refreshToken|rid|mac|wk` (or a keyed `refreshToken:` record),
+  validated through Growtopia's `checktoken` into a fresh session token.
+- **Provider gateway tokens** — keyed `key:value` records containing `token:` / `rid:` / `mac:` / `wk:`
+  (and optional `platform:` / `name:` / `cbits:` / `playerAge:` / `vid:`), each pinned to one
+  rotating exit IP for both the token fetch and the ENet logon.
+
+Bots can be added one at a time, pasted/loaded in bulk, or added from the Lua
+executor / MCP.
+
+## AutoGeiger / geiger support
+
+The engine ships a fleet-aware **AutoGeiger** module: configure hunt worlds,
+storage/depot worlds, and pickup worlds, the target item, recharge timing, and
+signal/settle waits, then arm it on selected bots. It walks the geiger signal,
+digs, deposits loot to the depot worlds, and picks prizes up — coordinated across
+the whole fleet through a shared `FleetState`. Configure it per bot from the bot
+detail **Automation** tab, or script it from the Lua executor (`autogeiger.*`).
 
 ## Build (Windows, MSVC + vcpkg)
 
 ```powershell
-# one-time: get vcpkg and integrate
 git clone https://github.com/microsoft/vcpkg
 .\vcpkg\bootstrap-vcpkg.bat
 
-# configure + build (manifest mode installs imgui/curl/nlohmann-json)
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=<path>\vcpkg\scripts\buildsystems\vcpkg.cmake
 cmake --build build --config Release
 ```
 
-The UI shell (window + Tahoma + panels) builds today. Engine modules are being
-ported in from the specs under `docs/port-specs/`; see `docs/ARCHITECTURE.md`.
+Manifest mode installs the dependencies (Dear ImGui, libcurl, Lua, nlohmann-json).
+Run the app from the project root so it finds `data/`. Provide your own
+`data/items.dat` (a Growtopia item database) for item names and the Database tab.
 
-## Layout
+## Extras
 
-```
-src/
-  core/       constants, logger
-  protocol/   packets, VariantList, klv/crc32/md5
-  net/        SOCKS5-UDP, ENet host wrapper, HTTP (libcurl), server_data
-  proxy/      game + bypass pools, DataImpulse sticky, rotation
-  login/      server_data -> dashboard -> growid -> ltoken flow
-  world/      tile/object model, items.dat, A* pathfinding
-  bot/        the per-bot engine, BotManager, FleetState (shared)
-  automation/ native in-engine automation modules (geiger, collect, coordinate)
-  ui/         ImGui panels + theme (Tahoma)
-  mcp/        headless stdio MCP server for autonomous agent control
-third_party/  vendored ENet (SOCKS5-patched), etc.
-docs/         ARCHITECTURE.md + port-specs/ (per-module C++ port specs)
-```
+- **`NxrthMcp.exe`** — a stdio MCP server exposing the same fleet to external agents (see `docs/MCP.md`).
+- **Lua API** — `docs/LUA.md`. **AI operator** — `docs/AI.md`. **Crash recovery** — `docs/RECOVERY.md`.
 
-## MCP server
+---
 
-The build also produces `AdonaiMcp.exe`, a headless stdio MCP server exposing
-bot sessions, navigation, world sensing, chat, inventory, collection, mining,
-building, and other player actions. See [`docs/MCP.md`](docs/MCP.md) for client
-configuration and the asynchronous command model.
-
-## Naming rules (enforced across the port)
-
-- `Mori` / `mori` -> `Adonai` / `adonai` (identifiers, paths, logs, window title, config names)
-- `Cloei` / `cloei` (upstream author/repo) -> `North` / `north`
+Questions / community: **[discord.gg/nxrth](https://discord.gg/nxrth)**

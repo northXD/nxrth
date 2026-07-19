@@ -1,11 +1,11 @@
-// Adonai UI theme: modern dark styling + font loading (Tahoma + FontAwesome).
+// Nxrth UI theme: modern dark styling + font loading (Tahoma + FontAwesome).
 #pragma once
 
 struct ImFont;
 
-namespace adonai::ui {
+namespace nxrth::ui {
 
-// Applies Adonai's modern dark ImGui style (rounding, spacing, palette).
+// Applies Nxrth's modern dark ImGui style (rounding, spacing, palette).
 void ApplyTheme();
 
 // Loads Tahoma (body / bold / title sizes) from the Windows font dir and MERGES
@@ -20,4 +20,4 @@ ImFont* FontTitle();
 // Large icon font (bigger FontAwesome), for the sidebar nav. Null until loaded.
 ImFont* FontIconsLarge();
 
-}  // namespace adonai::ui
+}  // namespace nxrth::ui

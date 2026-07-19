@@ -11,7 +11,7 @@
 #include "core/cursor.h"
 #include "core/logger.h"
 
-namespace adonai::world {
+namespace nxrth::world {
 
 Bgra extract_bgra(std::uint32_t color) {
     Bgra out;
@@ -136,7 +136,7 @@ const ItemInfo* ItemsDat::find_by_name(std::string_view name) const {
 
 ItemsDat ItemsDat::load() {
     // Search: CWD, ./data, then the executable's own dir + its data/ subdir, so
-    // it works whether Adonai runs from the build dir or the source root.
+    // it works whether Nxrth runs from the build dir or the source root.
     std::vector<std::string> candidates = {"items.dat", "data/items.dat"};
     char exe[MAX_PATH] = {0};
     const DWORD n = ::GetModuleFileNameA(nullptr, exe, MAX_PATH);
@@ -168,4 +168,4 @@ ItemsDat ItemsDat::load() {
     return ItemsDat{};
 }
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

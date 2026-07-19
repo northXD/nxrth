@@ -1,4 +1,4 @@
-// Adonai — save.dat / variant-list key/value store (ported from Mori/save_dat.rs).
+// Nxrth — save.dat / variant-list key/value store (ported from Mori/save_dat.rs).
 // Round-trippable: parse -> serialize is byte-stable given the same entry order.
 // Per-bot state; guarded by the owning bot's external lock. GT is little-endian.
 #pragma once
@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-namespace adonai::world {
+namespace nxrth::world {
 
 // XOR helper with key "90210" (self-inverse: encode == decode). Applied to meta.
 std::vector<std::uint8_t> xor_90210(const std::vector<std::uint8_t>& data);
@@ -65,4 +65,4 @@ struct SaveDat {
     }
 };
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

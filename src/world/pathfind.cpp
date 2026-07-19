@@ -1,4 +1,4 @@
-// Adonai — A* pathfinder implementation (byte-faithful port of Mori/astar.rs).
+// Nxrth — A* pathfinder implementation (byte-faithful port of Mori/astar.rs).
 #include "world/pathfind.h"
 
 #include <algorithm>
@@ -9,7 +9,7 @@
 #include <tuple>
 #include <unordered_set>
 
-namespace adonai::world {
+namespace nxrth::world {
 
 namespace {
 
@@ -248,4 +248,4 @@ std::tuple<std::uint32_t, std::uint32_t, float> AStar::cache_stats() const {
     return {cache_hits, cache_misses, hit_rate};
 }
 
-}  // namespace adonai::world
+}  // namespace nxrth::world

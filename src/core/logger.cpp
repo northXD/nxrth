@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace adonai {
+namespace nxrth {
 
 Logger& Logger::Instance() {
     static Logger inst;
@@ -12,15 +12,13 @@ Logger& Logger::Instance() {
 void Logger::Log(std::string msg, int bot_id) {
     std::lock_guard<std::mutex> lk(mu_);
     lines_.push_back(LogLine{bot_id, std::move(msg)});
-    if (lines_.size() > kCap)
-        lines_.erase(lines_.begin(), lines_.begin() + (lines_.size() - kCap));
+    while (lines_.size() > kCap) lines_.pop_front();
 }
 
 std::vector<LogLine> Logger::Snapshot(std::size_t max) const {
     std::lock_guard<std::mutex> lk(mu_);
-    if (lines_.size() <= max)
-        return lines_;
-    return std::vector<LogLine>(lines_.end() - static_cast<std::ptrdiff_t>(max), lines_.end());
+    const std::size_t count = std::min(max, lines_.size());
+    return std::vector<LogLine>(lines_.end() - static_cast<std::ptrdiff_t>(count), lines_.end());
 }
 
 void Logger::Clear() {
@@ -28,4 +26,4 @@ void Logger::Clear() {
     lines_.clear();
 }
 
-} // namespace adonai
+} // namespace nxrth

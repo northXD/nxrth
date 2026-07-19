@@ -1,7 +1,7 @@
-# Adonai Port Spec — Module 04: Proxy
+# Nxrth Port Spec — Module 04: Proxy
 
 **Source (Rust / Mori):** `src/proxy_pool.rs`, `src/rotation_pool.rs`, `src/proxy_test.rs`
-**Target (C++ / Adonai):** proxy subsystem (game-world proxy pool + rotating/bypass login proxy pool + world-rotation coordination + proxy self-test)
+**Target (C++ / Nxrth):** proxy subsystem (game-world proxy pool + rotating/bypass login proxy pool + world-rotation coordination + proxy self-test)
 
 This document is the **single source of truth** for the C++ port of this module. It is self-contained: an engineer can reimplement it without reading the Rust. Referenced external types (`Socks5Config`, `LoginInfo`, `ServerData`, `Socks5UdpSocket`) are documented at the interface level where they cross this module's boundary.
 
@@ -45,11 +45,11 @@ Magic/tuning constants that appear literally in this module (preserve exactly):
 
 ---
 
-## 1. RENAME RULES (apply across the whole Adonai port)
+## 1. RENAME RULES (apply across the whole Nxrth port)
 
 Global substitution rules for the port (identifiers, file paths, log lines, window titles, user-agents, config filenames):
 
-- `Mori` → `Adonai`, `mori` → `adonai`
+- `Mori` → `Nxrth`, `mori` → `nxrth`
 - `Cloei` → `North`, `cloei` → `north` (upstream author/repo name)
 
 **Occurrences inside these three files:** none. There are **no** literal `Mori`/`mori`/`Cloei`/`cloei` tokens in `proxy_pool.rs`, `rotation_pool.rs`, or `proxy_test.rs`. The on-disk filenames are generic and are **kept as-is** (they carry no brand):
@@ -58,13 +58,13 @@ Global substitution rules for the port (identifiers, file paths, log lines, wind
 
 Do **not** rename `DataImpulse`, `Growtopia`, `ltoken`, `ServerHello`, `SOCKS5`, `ENet` — these are third-party/protocol terms, not Mori/Cloei branding.
 
-> Rename obligations for this module are therefore inherited only indirectly: the *data root directory* is resolved as `current_dir()/data/...` (see §4). If the Adonai fleet relocates its data directory or brands log lines emitted by callers of this module, apply the rules there. The module's own code emits no branded strings.
+> Rename obligations for this module are therefore inherited only indirectly: the *data root directory* is resolved as `current_dir()/data/...` (see §4). If the Nxrth fleet relocates its data directory or brands log lines emitted by callers of this module, apply the rules there. The module's own code emits no branded strings.
 
 ---
 
 ## 2. EXTERNAL TYPE: `Socks5Config` (boundary type, from `src/bot/shared.rs`)
 
-This is the currency this module produces and consumes. Reproduce it verbatim in Adonai.
+This is the currency this module produces and consumes. Reproduce it verbatim in Nxrth.
 
 ```rust
 pub struct Socks5Config {
@@ -185,7 +185,7 @@ rotating_login_port_span=2000, rotating_login_proxy=None, rotating_login_proxies
 
 ### 3.4 `ProxyPoolView` / `ProxyPoolEntryView` (UI/serialize-only)
 
-These are read-model DTOs the UI renders. In Adonai (Dear ImGui, no web server) these become the data the proxy panel reads; keep the field set so the UI logic ports 1:1.
+These are read-model DTOs the UI renders. In Nxrth (Dear ImGui, no web server) these become the data the proxy panel reads; keep the field set so the UI logic ports 1:1.
 
 ```rust
 pub struct ProxyPoolView {
@@ -489,7 +489,7 @@ Two forms:
 2. `span = min(max(span,1), max_span)` (in `u32`).
 3. If `span == 1` → return `base_port` (no randomization).
 4. Else draw 4 random bytes (Mori uses a fresh UUIDv4's first 4 bytes as `u32` **little-endian**), `random = u32`; return `base_port + (random % span) as u16`.
-- **C++:** use any uniform RNG (`std::mt19937` seeded from `random_device`, or read 4 bytes). The UUID detail is incidental — what matters is a uniform pick in `[base_port, base_port+span-1]`. No dependency on UUID needed in Adonai.
+- **C++:** use any uniform RNG (`std::mt19937` seeded from `random_device`, or read 4 bytes). The UUID detail is incidental — what matters is a uniform pick in `[base_port, base_port+span-1]`. No dependency on UUID needed in Nxrth.
 
 ### 4.23 `random_index(len) -> usize` (private, `#[allow(dead_code)]`)
 
@@ -542,7 +542,7 @@ JSON object (pretty-printed, 2-space indent by Rust). Example (with one game ent
 
 ## 6. FILE `rotation_pool.rs` — world-rotation coordination (fleet-wide shared state)
 
-Not a network proxy. A shared, on-disk table (`rotation_pool_state.json`) where bots **claim / lock / update / release** worlds so multiple bots don't work the same world simultaneously. Directly relevant to Adonai's "bots must be aware of each other" requirement.
+Not a network proxy. A shared, on-disk table (`rotation_pool_state.json`) where bots **claim / lock / update / release** worlds so multiple bots don't work the same world simultaneously. Directly relevant to Nxrth's "bots must be aware of each other" requirement.
 
 ### 6.1 TYPES
 
@@ -626,7 +626,7 @@ The core mutual-exclusion primitive. Steps under the global lock:
    Use the first match found scanning priorities in order.
 7. If none found → `save_file`, return `None`.
 8. Otherwise lock it: `status="locked"`, `bot_id=Some(this)`, `bot_name=name`, `updated_at=now`, `note="claimed"`; clone; `save_file`; return the claimed status.
-- **C++/fleet note:** this is the heart of "bots aware of each other." In Rust it's a single-process global `Mutex` + a JSON file. If Adonai runs bots as threads in one process, a `std::mutex` around an in-memory `std::map` + best-effort file persistence is a faithful port. If Adonai ever spans processes, the file alone is NOT a cross-process lock — you'd need file locking or a shared IPC store. Preserve the priority list and TTL semantics exactly.
+- **C++/fleet note:** this is the heart of "bots aware of each other." In Rust it's a single-process global `Mutex` + a JSON file. If Nxrth runs bots as threads in one process, a `std::mutex` around an in-memory `std::map` + best-effort file persistence is a faithful port. If Nxrth ever spans processes, the file alone is NOT a cross-process lock — you'd need file locking or a shared IPC store. Preserve the priority list and TTL semantics exactly.
 
 ### 6.7 `update_world(pool_id, world, door, status, ready_count, seed_count, capacity, next_ready_at, bot_id, bot_name, note) -> RotationWorldStatus` **(pub)**
 
@@ -722,16 +722,16 @@ Serde: `error`/`detail` omitted from JSON when `None`. C++: use `std::optional` 
 
 ### 7.4 External dependencies crossed here (interface-level)
 
-- `Socks5UdpSocket::bind_through_proxy(local, proxy_addr, user, pass) -> io::Result<Self>`: TCP-connects to the proxy (10s connect timeout), sets 15s r/w timeouts on the control stream, performs the SOCKS5 handshake (incl. optional user/pass auth) and a UDP ASSOCIATE, returns a UDP socket that relays datagrams through the proxy. If the relay reply is `0.0.0.0`, it substitutes the proxy's own IP for the relay address. (Full spec: SOCKS5 module.) Port to the vendored patched C ENet + SOCKS5-UDP shim in Adonai.
-- `get_server_data_proxied_live(alternate: bool, &LoginInfo, proxy_url: Option<&str>) -> Result<ServerData>`: HTTP POST to Growtopia's `server_data.php` (primary vs `alternate` endpoint) through the given proxy URL; returns `ServerData { server: String, port: u16, loginurl, server_type: u8, beta_*, ... }`. (Full spec: server_data module.) In Adonai this is libcurl with the proxy set (`socks5h://…` or `http://…`).
+- `Socks5UdpSocket::bind_through_proxy(local, proxy_addr, user, pass) -> io::Result<Self>`: TCP-connects to the proxy (10s connect timeout), sets 15s r/w timeouts on the control stream, performs the SOCKS5 handshake (incl. optional user/pass auth) and a UDP ASSOCIATE, returns a UDP socket that relays datagrams through the proxy. If the relay reply is `0.0.0.0`, it substitutes the proxy's own IP for the relay address. (Full spec: SOCKS5 module.) Port to the vendored patched C ENet + SOCKS5-UDP shim in Nxrth.
+- `get_server_data_proxied_live(alternate: bool, &LoginInfo, proxy_url: Option<&str>) -> Result<ServerData>`: HTTP POST to Growtopia's `server_data.php` (primary vs `alternate` endpoint) through the given proxy URL; returns `ServerData { server: String, port: u16, loginurl, server_type: u8, beta_*, ... }`. (Full spec: server_data module.) In Nxrth this is libcurl with the proxy set (`socks5h://…` or `http://…`).
 - `LoginInfo { protocol: u32, game_version: String }` — the version pair posted to server_data.
 - `ServerData { server: String, port: u16, loginurl: String, server_type: u8, beta_server, beta_loginurl, beta_port: u16, ... }` — only `.server`/`.port` are used here.
 
 ---
 
-## 8. DEPENDENCY MAPPING (Rust crate → Adonai C++)
+## 8. DEPENDENCY MAPPING (Rust crate → Nxrth C++)
 
-| Rust / crate | Used for (this module) | Adonai C++ equivalent |
+| Rust / crate | Used for (this module) | Nxrth C++ equivalent |
 |---|---|---|
 | `serde` / `serde_json` | (de)serialize `ProxyPoolConfig`, `RotationPoolFile`, view/result DTOs; pretty JSON files | **nlohmann/json** (`to_json`/`from_json`, `dump(2)`); replicate `#[serde(default)]` (default-on-missing) and `skip_serializing_if=None` (omit null optionals) manually |
 | `url::Url` | parse/build proxy URLs (`parse_proxy_line`, `to_proxy_url`) | manual URL assembly + a small parser; percent-encode userinfo; **libcurl** consumes the URL string (`CURLOPT_PROXY`). Use `socks5h://` for remote DNS, `http://` for the 823 gateway |
@@ -750,19 +750,19 @@ Serde: `error`/`detail` omitted from JSON when `None`. C++: use `std::optional` 
 ## 9. THREADING & SHARED STATE
 
 ### 9.1 `proxy_pool.rs`
-- **Instance state** (`ProxyPool`): each `ProxyPool` owns its `config` and `path`. In Mori a single `ProxyPool` is held behind the app's shared state and mutated by `update`/`choose` (which both persist). If multiple threads touch one `ProxyPool`, guard it with a `std::mutex` in Adonai (Rust relied on the enclosing app lock; `choose`/`update` take `&mut self`).
+- **Instance state** (`ProxyPool`): each `ProxyPool` owns its `config` and `path`. In Mori a single `ProxyPool` is held behind the app's shared state and mutated by `update`/`choose` (which both persist). If multiple threads touch one `ProxyPool`, guard it with a `std::mutex` in Nxrth (Rust relied on the enclosing app lock; `choose`/`update` take `&mut self`).
 - **Process-global shared state** (survives across all bots/threads):
   - `LOGIN_PROXY_RR: AtomicUsize` — round-robin cursor so N concurrent bot logins spread deterministically across N bypass entries (avoids collision-hammering one exit IP). Cloned `RotatingLoginProxy` values all read/advance this same atomic.
   - `GAME_PROXY_POOL: Mutex<Vec<Socks5Config>>` — published snapshot of the resolved game pool, refreshed on load and every `update`. Read by `next_game_proxy` when a bot's subserver tunnel dies.
   - `GAME_PROXY_RR: AtomicUsize` — round-robin cursor for game-proxy failover, advanced even on skipped (same-as-current) slots.
-- **Per-bot state:** each bot holds ONE assigned game `Socks5Config` (from `choose`) and, if bypass is on, a cloned `RotatingLoginProxy`. Its assigned game proxy's `capacity_key` string is the bot's `proxy_key`, and the fleet's `active_counts: HashMap<capacity_key, usize>` (owned by the bot manager, not this module) is what `choose`/`view` consult to respect `max_bots_per_ip`. Adonai must maintain that fleet-wide active-count map (increment on assign, decrement on bot stop) so `choose` load-balances correctly.
+- **Per-bot state:** each bot holds ONE assigned game `Socks5Config` (from `choose`) and, if bypass is on, a cloned `RotatingLoginProxy`. Its assigned game proxy's `capacity_key` string is the bot's `proxy_key`, and the fleet's `active_counts: HashMap<capacity_key, usize>` (owned by the bot manager, not this module) is what `choose`/`view` consult to respect `max_bots_per_ip`. Nxrth must maintain that fleet-wide active-count map (increment on assign, decrement on bot stop) so `choose` load-balances correctly.
 - **IP-pinning invariant** (fleet-safety): `login_session()` pairs the HTTP token fetch and the ENet logon on ONE exit IP because the `ltoken` is IP-bound. Never split the pair across two picks or two proxies. (Matches the GT ltoken IP-binding memory: a rotating-per-stage proxy breaks GT login.)
 
 ### 9.2 `rotation_pool.rs`
-- **Single process-global `Mutex<RotationPoolFile>`** loaded once from disk, then authoritative in memory; every mutating op persists best-effort to `rotation_pool_state.json`. This is the **fleet coordination table**: all bot threads claim/lock/release worlds through it, making bots aware of each other (no two bots work the same world). Port as a singleton `std::mutex`-guarded `std::map`. Lock TTL (min 30s) auto-expires dead bots' locks; `bot_id` ownership gates release. If Adonai ever runs bots across processes, the JSON file is not a cross-process lock — add OS file locking or shared IPC.
+- **Single process-global `Mutex<RotationPoolFile>`** loaded once from disk, then authoritative in memory; every mutating op persists best-effort to `rotation_pool_state.json`. This is the **fleet coordination table**: all bot threads claim/lock/release worlds through it, making bots aware of each other (no two bots work the same world). Port as a singleton `std::mutex`-guarded `std::map`. Lock TTL (min 30s) auto-expires dead bots' locks; `bot_id` ownership gates release. If Nxrth ever runs bots across processes, the JSON file is not a cross-process lock — add OS file locking or shared IPC.
 
 ### 9.3 `proxy_test.rs`
-- Stateless & synchronous: blocks the calling thread up to ~ (SOCKS5 connect 10s + server_data HTTP + ENet 10s). Run it on a worker thread in Adonai so the ImGui UI stays responsive. No shared state.
+- Stateless & synchronous: blocks the calling thread up to ~ (SOCKS5 connect 10s + server_data HTTP + ENet 10s). Run it on a worker thread in Nxrth so the ImGui UI stays responsive. No shared state.
 
 ---
 

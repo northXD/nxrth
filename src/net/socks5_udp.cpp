@@ -1,4 +1,4 @@
-// Adonai — SOCKS5 UDP ASSOCIATE client implementation (from Mori/socks5.rs).
+// Nxrth — SOCKS5 UDP ASSOCIATE client implementation (from Mori/socks5.rs).
 #include "net/socks5_udp.h"
 
 #ifdef _WIN32
@@ -16,7 +16,7 @@
 #include <cstring>
 #include <mutex>
 
-namespace adonai::net {
+namespace nxrth::net {
 
 // ---------------------------------------------------------------------------
 // Platform shims
@@ -485,9 +485,9 @@ Socks5UdpSocket& Socks5UdpSocket::operator=(Socks5UdpSocket&& o) noexcept {
 }
 
 // Silence unused-helper warnings for platform builds that don't touch them all.
-static void adonai_socks5_touch() {
+static void nxrth_socks5_touch() {
     (void)&addr_len;
     (void)&would_block;
 }
 
-}  // namespace adonai::net
+}  // namespace nxrth::net
