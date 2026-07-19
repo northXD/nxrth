@@ -1,6 +1,6 @@
 # Nxrth
 
-A native **C++ Growtopia fleet client** — run and coordinate many bots from one
+A native **C++ Growtopia multibot client** — run and coordinate many bots from one
 Dear ImGui desktop app, with in-engine automation, proxy support, a sandboxed Lua
 executor, and a built-in AI operator.
 
