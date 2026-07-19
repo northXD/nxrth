@@ -178,7 +178,7 @@ Known native modules are `geiger`, `collect`, and `coordinate`.
 ## Deliberate Limits
 
 This is the complete safe Nxrth API over existing `BotCommand`, bot snapshots,
-fleet configuration, and native automations. Legacy Mori-style raw packet APIs,
+fleet configuration, and native automations.
 arbitrary HTTP/file access, event hooks, and script-defined rotation engines are
 not exposed. Native AutoGeiger and the MCP automation tools remain the supported
 paths for those workflows.
