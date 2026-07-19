@@ -11,7 +11,7 @@ executor, and a built-in AI operator.
 ## Features
 
 - **Multi-account fleet** — spawn and manage many bots at once, each on its own worker.
-- **Login methods** (see below) — GrowID/Mail, Google OAuth ltokens, and provider gateway tokens.
+- **Login methods** (see below) — GrowID/Mail, Fruit OAuth ltokens, and provider gateway tokens.
 - **Proxies** — SOCKS5 game pool (per-bot exit, capacity-limited) + a rotating "logon bypass" pool (one clean IP per login).
 - **AutoGeiger / geiger farming** — fleet-aware geiger hunting, digging, depositing, and pickup.
 - **Lua 5.4 executor** — sandboxed scripting over the bot + automation API, run fleet-wide or per bot.
