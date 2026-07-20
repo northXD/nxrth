@@ -1,4 +1,4 @@
-// Nxrth — per-bot shared snapshot + command surface (ported from Mori
+// Nxrth — per-bot shared snapshot + command surface (ported from Nxrth
 // bot_state.rs + player.rs; port spec 09 §1). This is the read-mostly mirror the
 // bot's worker thread WRITES and the UI/fleet layer READS, plus the UI->bot
 // command channel and the player value types.
@@ -292,7 +292,7 @@ using CmdSender = std::shared_ptr<CommandQueue<BotCommand>>;
 using CmdReceiver = std::shared_ptr<CommandQueue<BotCommand>>;
 
 // ---------------------------------------------------------------------------
-// EventSink — the in-process notifier that replaces Mori's WsTx broadcaster
+// EventSink — the in-process notifier that replaces Nxrth's WsTx broadcaster
 // (ARCHITECTURE: "not websocket frames"). The bot mirrors most state into
 // BotState (UI polls it) and calls these for the explicit event surfaces.
 // Every override is optional (default no-op) so a headless fleet needs no sink.

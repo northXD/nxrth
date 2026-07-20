@@ -1,5 +1,5 @@
 // Nxrth — world map model + SendMapData byte parser implementation.
-// Byte-exact port of Mori/world/mod_impl.rs, world/constants.rs.
+// Byte-exact port of Nxrth/world/mod_impl.rs, world/constants.rs.
 #include "world/world.h"
 
 #include <algorithm>

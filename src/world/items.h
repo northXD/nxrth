@@ -1,4 +1,4 @@
-// Nxrth — Growtopia items.dat binary parser (ported from Mori/items.rs).
+// Nxrth — Growtopia items.dat binary parser (ported from Nxrth/items.rs).
 // Read-only item metadata DB, loaded once at startup and shared fleet-wide as
 // std::shared_ptr<const ItemsDat>. GT is little-endian throughout.
 #pragma once

@@ -1,4 +1,4 @@
-// Nxrth — proxy configuration model (ported from Mori/proxy_pool.rs;
+// Nxrth — proxy configuration model (ported from Nxrth/proxy_pool.rs;
 // docs/port-specs/04-proxy.md §3-§5).
 //
 // Two concerns live here:

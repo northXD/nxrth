@@ -1,4 +1,4 @@
-// Nxrth — SOCKS5 UDP ASSOCIATE client implementation (from Mori/socks5.rs).
+// Nxrth — SOCKS5 UDP ASSOCIATE client implementation (from Nxrth/socks5.rs).
 #include "net/socks5_udp.h"
 
 #ifdef _WIN32

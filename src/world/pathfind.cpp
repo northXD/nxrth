@@ -1,4 +1,4 @@
-// Nxrth — A* pathfinder implementation (byte-faithful port of Mori/astar.rs).
+// Nxrth — A* pathfinder implementation (byte-faithful port of Nxrth/astar.rs).
 #include "world/pathfind.h"
 
 #include <algorithm>

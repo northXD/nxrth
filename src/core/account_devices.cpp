@@ -1,5 +1,5 @@
 // Nxrth — per-account device identity store implementation.
-// Ported from Mori/account_devices.rs (§6 of docs/port-specs/02-constants-data.md).
+// Ported from Nxrth/account_devices.rs (§6 of docs/port-specs/02-constants-data.md).
 #include "core/account_devices.h"
 
 #include "core/constants.h"

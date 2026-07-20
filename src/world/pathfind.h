@@ -1,4 +1,4 @@
-// Nxrth — A* pathfinder over the per-tile collision grid (ported from Mori/astar.rs).
+// Nxrth — A* pathfinder over the per-tile collision grid (ported from Nxrth/astar.rs).
 // Octile costs (10 orthogonal / 14 diagonal), corner-cut prevention, and a path
 // cache keyed by (from, to, has_access). Per-bot; rebuilt from tiles each search.
 #pragma once

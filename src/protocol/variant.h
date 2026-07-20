@@ -1,4 +1,4 @@
-// Nxrth — VariantList / Variant codec (ported from Mori/protocol/variant.rs).
+// Nxrth — VariantList / Variant codec (ported from Nxrth/protocol/variant.rs).
 // The VariantList is the serialized argument list carried in the extra_data of a
 // CallFunction (0x01) GameUpdatePacket. This module only DESERIALIZES; outgoing
 // VariantList building lives elsewhere. GT is little-endian throughout.

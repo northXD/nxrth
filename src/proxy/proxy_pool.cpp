@@ -1,5 +1,5 @@
 // Nxrth — proxy configuration model implementation.
-// Ported from Mori/proxy_pool.rs (docs/port-specs/04-proxy.md §3-§5).
+// Ported from Nxrth/proxy_pool.rs (docs/port-specs/04-proxy.md §3-§5).
 #include "proxy/proxy_pool.h"
 
 #ifdef _WIN32

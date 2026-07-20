@@ -1,5 +1,5 @@
 // Nxrth — per-account device identity store (FLEET-WIDE, process-global).
-// Ported from Mori/account_devices.rs. Persists a stable, unique device identity
+// Ported from Nxrth/account_devices.rs. Persists a stable, unique device identity
 // (rid/mac/wk + hash/hash2/zf) per account into data/account_devices.json so that
 // every bot in the fleet presents as a distinct device. All access serializes on
 // one process-global mutex around a read-modify-write of the JSON file.

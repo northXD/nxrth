@@ -1,8 +1,8 @@
 // Nxrth - geiger farming automation module (fleet-coordinated).
 //
-// Native C++ port of Mori's web-UI-generated geiger Lua farm (Mori-2.0.0
+// Native C++ port of Nxrth's web-UI-generated geiger Lua farm (Nxrth-2.0.0
 // AutomationsPage buildGeigerScript). The SEARCH is candidate-elimination /
-// trilateration by concentric squared-distance rings, faithful to Mori's
+// trilateration by concentric squared-distance rings, faithful to Nxrth's
 // apply_observation - NOT a per-tile lawn-mower scan. The prize sits on one
 // hidden tile; each geiger reading taken at a probe tile P with color C
 // constrains the prize to an annulus (ring band) around P whose inner/outer
@@ -10,7 +10,7 @@
 // could still be on; each reading keeps only candidates whose squared L2
 // distance to the reading tile falls inside C's band and deletes the rest.
 // Successive rings intersect and the set collapses. The next probe is chosen by
-// an info-gain heuristic (ported from Mori's score_probe). The hunt STOPS the
+// an info-gain heuristic (ported from Nxrth's score_probe). The hunt STOPS the
 // moment area==Prize or the inventory diff shows the counter was consumed; then
 // the bot waits out the post-prize recharge and a fresh hunt resets the grid.
 //
@@ -110,7 +110,7 @@ private:
     // drop the whole (held - keep) via the reliable 2-step drop_item, VERIFYING the
     // stack actually left the pack (inventory count fell) and hopping to a walkable
     // neighbour tile when a tile fills up (GT caps item drops per tile). Sleeps
-    // between drops (keeps ENet serviced). Mirrors Mori's rotation.dropExcess loop.
+    // between drops (keeps ENet serviced). Mirrors Nxrth's rotation.dropExcess loop.
     // Early-aborts if nothing drops across several tiles (a no-drop-access world:
     // stops the "Cant place tile" spam). Returns the number of stacks it dropped.
     std::uint32_t run_deposit(nxrth::bot::BotContext& self,
@@ -125,7 +125,7 @@ private:
     bool try_pickup_counter(nxrth::bot::BotContext& self, std::uint16_t item,
                             std::uint64_t scan_ms, int empty_scan_limit);
 
-    // ---- candidate-elimination search (ported from Mori) ---------------------
+    // ---- candidate-elimination search (ported from Nxrth) ---------------------
     void reset_hunt_state();
     void reset_candidates(nxrth::bot::BotContext& self, int min_y, int max_y_cap, int width_cap);
     void fill_candidate_grid();  // rebuild candidates_ from the stored grid bounds

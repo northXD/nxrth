@@ -2731,7 +2731,7 @@ void AppUi::DrawBotLoggerTab(const nxrth::bot::BotState& st) {
 }
 
 // Inventory: one row per slot. Wear/Unwear (by is_active), Drop (1), Drop All
-// (amount), Trash (1) -> manager_.send_cmd (mirrors Mori bot-detail buttons).
+// (amount), Trash (1) -> manager_.send_cmd (mirrors Nxrth bot-detail buttons).
 void AppUi::DrawInventoryTab(const nxrth::bot::BotState& st) {
     if (st.inventory.empty()) {
         ImGui::TextDisabled("inventory empty (bot is not in a world yet).");

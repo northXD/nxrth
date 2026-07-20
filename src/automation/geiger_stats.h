@@ -1,4 +1,4 @@
-// Nxrth - process-global geiger farm aggregate (port of Mori's geiger_stats.rs).
+// Nxrth - process-global geiger farm aggregate.
 //
 // Every bot runs its own GeigerModule instance, so per-module tallies only reflect
 // one bot. This shared, thread-safe store accumulates FLEET-WIDE totals (per-item

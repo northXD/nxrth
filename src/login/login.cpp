@@ -155,6 +155,28 @@ std::string classify_body(const std::string& content_type, const std::string& bo
     return "other";
 }
 
+// Best-effort, content-free label for WHICH kind of HTML page came back, so a WAF
+// interstitial is distinguishable from a GT error page (helps diagnose non-JSON).
+std::string html_page_hint(const std::string& body) {
+    auto has = [&](const char* n) { return ci_contains(body, n); };
+    if (has("just a moment") || has("cf-chl") || has("cf_chl") ||
+        has("challenge-platform") || has("attention required"))
+        return "cloudflare-challenge";
+    if (has("captcha")) return "captcha";
+    if (has("cloudflare")) return "cloudflare";
+    if (has("maintenance")) return "maintenance";
+    std::size_t p = body.find("<title");
+    if (p == std::string::npos) p = body.find("<TITLE");
+    if (p != std::string::npos) {
+        std::size_t gt = body.find('>', p);
+        std::size_t lt = (gt == std::string::npos) ? std::string::npos : body.find('<', gt + 1);
+        if (gt != std::string::npos && lt != std::string::npos && lt > gt + 1)
+            return "title=\"" +
+                   trim(body.substr(gt + 1, std::min<std::size_t>(lt - (gt + 1), 80))) + "\"";
+    }
+    return "";
+}
+
 // Extract the .text-danger.text-danger-wrapper element text from an HTML error page.
 std::string extract_danger_text(const std::string& html) {
     std::size_t p = html.find("text-danger-wrapper");
@@ -434,13 +456,20 @@ LoginTokenResult check_token(const std::string& refresh_token,
     const auto parsed = nlohmann::json::parse(response.body, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object()) {
         const std::string ctype = response.header("Content-Type").value_or("");
+        // GT's login/checktoken failure is an HTML page whose .text-danger-wrapper
+        // holds the human-readable reason ("Fail to login...", "...invalid", a
+        // rate-limit notice, etc.). Surface it so non-JSON is actually diagnosable.
+        const std::string danger = extract_danger_text(response.body);
+        const std::string hint = danger.empty() ? html_page_hint(response.body) : std::string();
         return {std::nullopt,
                 LoginError{LoginErrorKind::Other,
                            "checktoken returned non-JSON (HTTP " +
                                std::to_string(response.status) + ", content-type=" +
                                (ctype.empty() ? "?" : ctype) + ", body=" +
                                classify_body(ctype, response.body) + ", " +
-                               std::to_string(response.body.size()) + " bytes)"}};
+                               std::to_string(response.body.size()) + " bytes)" +
+                               (danger.empty() ? (hint.empty() ? "" : " - page: " + hint)
+                                                : " - GT says: \"" + danger + "\"")}};
     }
     if (parsed.value("status", std::string{}) != "success") {
         std::string message;

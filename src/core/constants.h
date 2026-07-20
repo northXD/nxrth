@@ -1,4 +1,4 @@
-// Nxrth — Growtopia client constants (ported from Mori/constants.rs).
+// Nxrth — Growtopia client constants (ported from Nxrth/constants.rs).
 // GT is little-endian throughout. Version is FORCE-enforced by the game.
 #pragma once
 #include <cstdint>

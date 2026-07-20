@@ -1,4 +1,4 @@
-// Nxrth — Growtopia login crypto (ported from Mori/protocol/crypto.rs).
+// Nxrth — Growtopia login crypto (ported from Nxrth/protocol/crypto.rs).
 // KLV computation + GT rotate-left-5 hash. Uppercase MD5 hex is mandatory.
 #pragma once
 #include <cstdint>

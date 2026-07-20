@@ -1,4 +1,4 @@
-// Nxrth — BotManager: the fleet supervisor (ported from Mori bot_manager.rs;
+// Nxrth — BotManager: the fleet supervisor (ported from Nxrth bot_manager.rs;
 // port spec 09 §1.13-§3.17 + §5).
 //
 // Owns the whole fleet. Each running bot lives on its OWN OS thread (Bot::run is
@@ -15,7 +15,7 @@
 // spawn, exactly like items_dat / sink) — never bot-to-bot directly.
 //
 // This is the object the ImGui UI drives. The BotManager has NO internal lock
-// (faithful to Mori, which held it behind an outer axum lock): own it on the UI
+// (faithful to Nxrth, which held it behind an outer axum lock): own it on the UI
 // thread OR wrap it in a std::mutex — every public method mutates/iterates the
 // manager-owned fields and must be serialized by the owner (spec §5.4). The
 // per-bot SharedBotState / CommandQueue / FleetState carry their OWN finer locks.

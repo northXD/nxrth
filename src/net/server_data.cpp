@@ -1,4 +1,4 @@
-// Nxrth — server_data.php fetch + parse (ported from Mori server_data.rs).
+// Nxrth — server_data.php fetch + parse (ported from Nxrth server_data.rs).
 // See docs/port-specs/03-net-socks5.md (server_data.rs section).
 
 #include "net/server_data.h"

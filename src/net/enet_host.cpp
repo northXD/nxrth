@@ -311,7 +311,7 @@ bool BotHost::connect(const sockaddr* addr, socklen_t addr_len,
 
     ENetPeer* peer = enet_host_connect(host, &ea, channel_count, data);
     if (!peer) {
-        // Mori `.expect("connect failed")` panics; Nxrth treats it as a failed
+        // Nxrth `.expect("connect failed")` panics; Nxrth treats it as a failed
         // attempt so the run loop can retry (never abort the process).
         nxrth::log("[Bot] connect failed (no free peer) — will retry");
         return false;
@@ -334,7 +334,7 @@ void BotHost::peer_send(PeerId peer, std::uint8_t channel,
     ENetPacket* packet = enet_packet_create(data, len, flags);
     if (!packet) return;
     if (enet_peer_send(reinterpret_cast<ENetPeer*>(p), channel, packet) < 0) {
-        // enet_peer_send does not free on failure; Mori ignores the Result (.ok()).
+        // enet_peer_send does not free on failure; Nxrth ignores the Result (.ok()).
         enet_packet_destroy(packet);
     }
 }

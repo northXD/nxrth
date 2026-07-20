@@ -1,4 +1,4 @@
-// Nxrth — server_data.php fetch + parse (ported from Mori server_data.rs).
+// Nxrth — server_data.php fetch + parse (ported from Nxrth server_data.rs).
 //
 // An HTTPS POST to Growtopia's server_data.php (growtopia1 primary / growtopia2
 // alternate) that returns a pipe-delimited key/value blob describing the game

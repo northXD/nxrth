@@ -1,4 +1,4 @@
-// Nxrth — per-bot inventory model (ported from Mori/inventory.rs).
+// Nxrth — per-bot inventory model (ported from Nxrth/inventory.rs).
 // Parses the inventory blob the server sends and maintains live inventory state.
 // Per-bot mutable state, guarded by the owning bot's external lock.
 #pragma once

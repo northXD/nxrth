@@ -1,5 +1,5 @@
 // Nxrth — GT wire framing + tank/GameUpdatePacket codec
-// (ported from Mori/protocol/packet.rs). GT is little-endian throughout.
+// (ported from Nxrth/protocol/packet.rs). GT is little-endian throughout.
 #pragma once
 #include <cstddef>
 #include <cstdint>

@@ -1,6 +1,6 @@
 // Nxrth — little-endian, bounds-checked byte reader.
 // Every binary parser (items.dat, save.dat, inventory, VariantList) is driven
-// by this cursor. Ported from Mori/cursor.rs. GT is little-endian throughout.
+// by this cursor. Ported from Nxrth/cursor.rs. GT is little-endian throughout.
 #pragma once
 #include <cstddef>
 #include <cstdint>

@@ -1,4 +1,4 @@
-// Nxrth — save.dat / variant-list key/value store (ported from Mori/save_dat.rs).
+// Nxrth — save.dat / variant-list key/value store (ported from Nxrth/save_dat.rs).
 // Round-trippable: parse -> serialize is byte-stable given the same entry order.
 // Per-bot state; guarded by the owning bot's external lock. GT is little-endian.
 #pragma once

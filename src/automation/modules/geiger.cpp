@@ -54,7 +54,7 @@ const char* const kGeigerPrizeNames[] = {
     "Neon Wings", "Cosmic Force", "Sakura's Revenge", "Shattered Spear", "UbiToken",
     // geigerhills
     "Uranium Block",
-    // Mori TRACKED_ROWS extras
+    //extras
     "Easter Egg - Rainbow", "Golden Egg Shard - Middle",
 };
 
@@ -138,7 +138,7 @@ std::vector<std::pair<std::string, std::string>> parse_worlds(const std::string&
 }
 
 // ---------------------------------------------------------------------------
-// Distance-band model (ported verbatim from Mori's `ranges`, squared tiles).
+// Distance-band model (ported verbatim from squared tiles).
 // Each geiger color = an annulus around the reading tile: the prize is that far.
 //   Red 15-30 tiles -> 225..900 | Yellow 7.5-15 -> 56.25..225
 //   Green 4-7.5      -> 16..56.25 | RapidGreen 0-4 -> 0..16
@@ -259,7 +259,7 @@ GeigerModule::DoorCheck GeigerModule::check_target_door(
     if (wanted_tile) return DoorCheck::Mismatch;
 
     // Some worlds hide a linked-door extra from the map. If we are not standing
-    // at the main door, match Mori's cautious acceptance instead of deadlocking.
+    // at the main door, cautious acceptance instead of deadlocking.
     return DoorCheck::Cautious;
 }
 
@@ -324,7 +324,7 @@ bool GeigerModule::refresh_hunt_world(
 }
 
 // ---------------------------------------------------------------------------
-// candidate-elimination search (port of Mori reset_candidates / apply_observation
+// candidate-elimination search (port of  apply_observation
 // / choose_probe / score_probe / build_probe_points)
 // ---------------------------------------------------------------------------
 void GeigerModule::suppress_collect(nxrth::bot::BotContext& self) {
@@ -695,7 +695,7 @@ GeigerModule::Point GeigerModule::choose_probe(const std::optional<Obs>& focus) 
         focus_obs = *focus;
     } else {
         // No color focus: search wide at Red scale (disc radius/step), but score
-        // with the DEFAULT weights (focus.area == nullopt) exactly like Mori's
+        // with the DEFAULT weights (focus.area == nullopt) exactly like
         // score_probe(pt, anchor) - the Red-branch penalty override is only for a
         // real Red reading, not the initial centroid sweep.
         anchor = candidate_centroid();
@@ -816,7 +816,7 @@ void GeigerModule::send_geiger_webhook(
     nlohmann::json embed;
     embed["title"] = "Geiger Logs";
     embed["description"] = desc;
-    embed["color"] = 65280;  // green, matches Mori
+    embed["color"] = 65280;  // green
     nlohmann::json payload;
     payload["username"] = "Nxrth Geiger";
     payload["content"] = "";
@@ -941,7 +941,7 @@ void GeigerModule::tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fl
     // White-door recovery: a warp that dropped + re-logged to the gateway lands us
     // here. Clear the warp debounce so the sections below re-warp to our objective
     // (hunt/depot/pickup) IMMEDIATELY instead of sitting at the white door - this is
-    // how Mori recovers from a failed warp.
+    // how Nxrth recovers from a failed warp.
 
     // ---- config (fleet-wide, live) ----
     const auto& cfg = config;
@@ -1338,7 +1338,7 @@ void GeigerModule::tick(nxrth::bot::BotContext& self, nxrth::bot::FleetState& fl
     // counter almost certainly isn't active (or we're mis-equipped) - blindly
     // probing the grid centroid is exactly the "stuck at ~centre" symptom. Forget
     // the (possibly wrong) equip belief so section 2 re-wears next tick, and reset
-    // the hunt. Mirrors Mori's no_signal_steps recovery.
+    // the hunt. Mirrors Nxrth's no_signal_steps recovery.
     if (obs.area.has_value()) {
         no_signal_probes_ = 0;
         signal_refresh_attempts_ = 0;

@@ -1,4 +1,4 @@
-// Nxrth — GrowID login orchestration (ported from Mori login.rs + bot/auth.rs).
+// Nxrth — GrowID login orchestration (ported from Nxrth login.rs + bot/auth.rs).
 // See docs/port-specs/05-login.md.
 //
 // Supports classic GrowID credentials, Google OAuth refresh-token records, and
@@ -60,6 +60,7 @@ struct LoginIdentity {
     std::string steam_token;
     std::string klv;
     std::string vid;  // provider validate-token device id (naae build_protocol_body vid|)
+    std::string tank_id_name;  // OAuth checktoken clientData tankIDName (the account name)
 };
 
 // Secret-safe fingerprint for logs: "len=<n> sha=<first 12 hex of SHA-256>".

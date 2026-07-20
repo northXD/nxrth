@@ -1,11 +1,5 @@
 // Nxrth — fleet coordination automation module + shared claim helpers.
 //
-// Ported intent: Mori's per-bot Lua `rotation.pool*` API (port spec 11 §6.5) —
-// bots claim/release farm worlds from a shared pool so the fleet spreads out
-// instead of colliding on the same world/target. In Nxrth there is NO Lua: the
-// shared pool is the process-wide FleetState (bot/fleet_state.h), and this native
-// module drives each Bot through its public action helpers (bot/bot.h) while
-// coordinating via FleetState::claim/release/owner.
 //
 // This header ALSO exposes the small claim-key + claim/release helpers that other
 // automation modules (e.g. CollectModule) reuse so every module speaks the same

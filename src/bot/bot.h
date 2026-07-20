@@ -100,7 +100,7 @@ struct TemporaryData {
 // Native fleet-aware automation seam (ARCHITECTURE). A module ticks each bot
 // worker iteration with that bot's live context (the Bot itself) + the shared
 // FleetState, and drives the bot by calling its action helpers directly (same
-// thread, so blocking actions keep ENet serviced via sleep_ms). Replaces Mori's
+// thread, so blocking actions keep ENet serviced via sleep_ms). Replaces Nxrth's
 // Lua script_channel entirely.
 // ---------------------------------------------------------------------------
 using BotContext = Bot;
@@ -119,7 +119,7 @@ struct AutomationModule {
 class Bot {
 public:
     // --- §2.4 factories (return nullptr on failed spawn; never throw) --------
-    // Mori returned Option<Bot>; a std::unique_ptr keeps Bot non-movable (it
+    // Nxrth returned Option<Bot>; a std::unique_ptr keeps Bot non-movable (it
     // holds a std::mutex-guarded state / non-relocatable members).
     static std::unique_ptr<Bot> create(
         const std::string& username, const std::string& password,
@@ -160,6 +160,13 @@ public:
     void disconnect();
     void reconnect();
     void place(std::int32_t offset_x, std::int32_t offset_y, std::uint32_t item_id, bool is_punch);
+    // A tile update arrived at (x,y): resolve any pending place there. If the tile
+    // now shows our item (fg or bg) the server accepted it -> consume 1 from the
+    // inventory; otherwise the place is dropped without consuming.
+    void confirm_place(std::uint32_t x, std::uint32_t y, std::uint16_t fg, std::uint16_t bg);
+    // Drop pending places whose confirmation deadline passed (lag / no access):
+    // release the reservation, never consume. Called each run() tick.
+    void expire_pending_places();
     void punch(std::int32_t ox, std::int32_t oy);                 // place(.,.,18,true)
     void wrench(std::int32_t ox, std::int32_t oy);                // place(.,.,32,false)
     void wrench_at(std::int32_t tile_x, std::int32_t tile_y);     // absolute tile
@@ -364,6 +371,19 @@ private:
     std::unordered_map<std::uint32_t, Player> players_;  // 45 keyed by net_id
     nxrth::world::Inventory inventory_;        // 46
     std::unordered_set<std::uint16_t> equipped_items_;  // 47
+
+    // Place confirmation: a block/seed/bg is only removed from the inventory once
+    // the server echoes a tile update for the placed cell showing our item. Until
+    // then the place is "pending" and its item is "reserved" so we never send more
+    // places than we own; unconfirmed places (lag, or no build access) expire from
+    // the run() loop and release their reservation WITHOUT consuming an item.
+    struct PendingPlace {
+        std::uint32_t x = 0, y = 0;
+        std::uint16_t item_id = 0;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    std::vector<PendingPlace> pending_places_;
+    std::unordered_map<std::uint16_t, std::uint32_t> place_reserved_;  // item_id -> in-flight
     std::optional<nxrth::world::World> world_;  // 48
     std::optional<nxrth::net::PeerId> peer_id_;  // 49
     std::shared_ptr<SharedBotState> state_;     // 50  UI/fleet mirror
@@ -382,7 +402,7 @@ private:
     bool pathfind_recalc_ = false;              // 60
     BotDelays delays_;                          // 61
     std::shared_ptr<const nxrth::world::ItemsDat> items_dat_;  // 62
-    // 63-66: Mori's Lua script channels -> native automation seam (NO Lua).
+    // 63-66: Nxrth's Lua script channels -> native automation seam (NO Lua).
     std::shared_ptr<std::atomic<bool>> script_stop_ =
         std::make_shared<std::atomic<bool>>(false);            // 66 automation interrupt
     std::vector<std::unique_ptr<AutomationModule>> automation_modules_;
@@ -446,7 +466,8 @@ std::string provider_login_protocol();
 // meta. Load-bearing fields = rid/mac/vid + meta (klv/hash are accepted but not
 // validated). Shared by the initial login and the reconnect re-exchange.
 std::string build_checktoken_client_data(const nxrth::login::LoginIdentity& id,
-                                         const std::string& meta, const std::string& protocol);
+                                         const std::string& meta, const std::string& protocol,
+                                         bool oauth = false);
 // First-gateway login packet for a provider validate-ltoken: the FULL client
 // identity (game_version/meta/klv/hash/rid/mac/wk/vid + platformID|1) with the
 // token in `ltoken|`. A bare/minimal packet (no game_version/meta/klv) is rejected

@@ -1,9 +1,9 @@
-// Nxrth — thin C++ wrapper over the vendored C ENet (ported from Mori's
+// Nxrth — thin C++ wrapper over the vendored C ENet (ported from Nxrth's
 // `BotHost` enum + `Bot::create_host`, port spec 06 §1.3 / §2.2 / §2.3).
 //
 // One BotHost owns one ENetHost. Its underlying UDP socket may be either a plain
 // direct socket or — when a Socks5Config relay is supplied — routed through a
-// SOCKS5 UDP-ASSOCIATE proxy. Mori modelled this as a compile-time `enum
+// SOCKS5 UDP-ASSOCIATE proxy. Nxrth modelled this as a compile-time `enum
 // BotHost { Direct, Socks5 }`; in C++ a single class suffices because the SOCKS5
 // behaviour lives in the vendored ENet's *patched socket layer*, not in the host
 // type (see the patch contract at the bottom of this file + third_party/enet/README.md).
@@ -66,7 +66,7 @@ struct PeerId {
     bool operator==(const PeerId& o) const { return index == o.index; }
 };
 
-// One serviced ENet event, decoupled from ENet types (mirrors Mori's EventNoRef).
+// One serviced ENet event, decoupled from ENet types (mirrors Nxrth's EventNoRef).
 struct HostEvent {
     enum class Type { Connect, Disconnect, Receive };
     Type type;
@@ -110,7 +110,7 @@ public:
     // is set to (0, 12s, 30s) before the event is returned (spec 06 §2.8).
     std::optional<HostEvent> next_event();
 
-    // Begin connecting to `addr`. On failure logs and returns false (Mori
+    // Begin connecting to `addr`. On failure logs and returns false (Nxrth
     // `.expect` panics; Nxrth must not abort the process — the run loop retries).
     bool connect(const sockaddr* addr, socklen_t addr_len,
                  std::size_t channel_count = kHostChannelLimit,
@@ -119,7 +119,7 @@ public:
     // Round-trip time in ms (0 if the peer is gone).
     std::uint32_t peer_rtt(PeerId peer) const;
 
-    // Queue a packet to the peer; the send Result is ignored (Mori `.ok()`).
+    // Queue a packet to the peer; the send Result is ignored (Nxrth `.ok()`).
     // GT login/game traffic is reliable on channel 0.
     void peer_send(PeerId peer, std::uint8_t channel,
                    const std::uint8_t* data, std::size_t len, bool reliable = true);

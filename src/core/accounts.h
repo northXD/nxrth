@@ -1,4 +1,4 @@
-// Nxrth — accounts_stats.json / user:pass extractor (ported from Mori's web
+// Nxrth — accounts_stats.json / user:pass extractor (ported from Nxrth's web
 // AccountsPage parseAccountStats). Feeds the bulk "Accounts" tab.
 #pragma once
 #include <string>

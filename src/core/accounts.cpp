@@ -33,7 +33,7 @@ bool likely_username(const std::string& u) {
 
 bool likely_password(const std::string& p) { return p.size() >= 3 && p.size() <= 64; }
 
-// The many key spellings Mori accepted for each field.
+// The many key spellings Nxrth accepted for each field.
 const std::vector<std::string>& user_keys() {
     static const std::vector<std::string> k = {
         "username", "user",      "growid",       "grow_id",   "grow_id_name",

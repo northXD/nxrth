@@ -268,10 +268,24 @@ std::string provider_login_protocol() {
 }
 
 std::string build_checktoken_client_data(const LoginIdentity& id, const std::string& meta,
-                                         const std::string& protocol) {
-    // Superset PLAINTEXT clientData (GT ignores unknown keys). Nxrth's check_token
-    // form-encodes this; GT decodes it to plaintext (NOT base64). Load-bearing fields
-    // are the device (rid/mac/vid) + the server_data meta.
+                                         const std::string& protocol, bool oauth) {
+    // PLAINTEXT clientData (GT ignores unknown keys). check_token form-encodes this;
+    // GT decodes it to plaintext (NOT base64). Load-bearing fields are the device
+    // (rid/mac/vid) + the server_data meta.
+    if (oauth) {
+        // The "more advanced" reference (bombo) OAuth clientData: tankIDName carries
+        // the account name, GDPR|1, no fz/zf/lmode, and the vid line is omitted when
+        // empty. cbits/country/hash2 come from the (OAuth-tuned) identity.
+        const std::string vid_line = id.vid.empty() ? std::string() : ("vid|" + id.vid + "\n");
+        return "tankIDName|" + id.tank_id_name + "\ntankIDPass|\nrequestedName|\nf|1\nprotocol|" +
+               protocol + "\ngame_version|" + id.game_version + "\ncbits|" + id.cbits +
+               "\nplayer_age|" + id.player_age + "\nGDPR|" + id.gdpr + "\nFCMToken|\ncategory|" +
+               id.category + "\ntotalPlaytime|0\nklv|" + id.klv + "\nhash2|" + id.hash2 + "\n" +
+               vid_line + "aid|\nmeta|" + meta + "\nfhash|" + std::to_string(consts::FHASH) +
+               "\nrid|" + id.rid + "\nplatformID|" + id.platform_id + "\ndeviceVersion|0\ncountry|" +
+               id.country + "\nhash|" + id.hash + "\nmac|" + id.mac + "\nwk|" + id.wk + "\n";
+    }
+    // Non-OAuth (Google refresh-token) superset format.
     return "tankIDName|\ntankIDPass|\nrequestedName|\nf|1\nprotocol|" + protocol +
            "\ngame_version|" + id.game_version + "\nfz|" + id.fz + "\ncbits|" + id.cbits +
            "\nplayer_age|" + id.player_age + "\nGDPR|" + id.gdpr + "\nFCMToken|\ncategory|" +
@@ -344,6 +358,48 @@ std::optional<LtokenRecord> parse_ltoken_string(const std::string& s) {
         }
         parts.push_back(trim_copy(t.substr(start, bar - start)));
         start = bar + 1;
+    }
+
+    // "@rja_<id>|<mac>:<rid>:<wk>:<ltoken>" delivery (the LTOKEN script export). The
+    // 2nd pipe field packs mac(6 octets):rid:wk:ltoken and the mac keeps its own
+    // colons, so peel the LAST three colons off the right. Rewrite to the positional
+    // token|rid|mac|wk form the logic below already understands.
+    if (parts.size() == 2) {
+        const std::string& sisa = parts[1];
+        const std::size_t c1 = sisa.rfind(':');
+        const std::size_t c2 = (c1 == std::string::npos || c1 == 0) ? std::string::npos
+                                                                     : sisa.rfind(':', c1 - 1);
+        const std::size_t c3 = (c2 == std::string::npos || c2 == 0) ? std::string::npos
+                                                                     : sisa.rfind(':', c2 - 1);
+        if (c3 != std::string::npos) {
+            const std::string mac = sisa.substr(0, c3);
+            const std::string rid = sisa.substr(c3 + 1, c2 - c3 - 1);
+            const std::string wk = sisa.substr(c2 + 1, c1 - c2 - 1);
+            const std::string ltoken = sisa.substr(c1 + 1);
+            auto is_hex32 = [](const std::string& v) {
+                return v.size() == 32 && std::all_of(v.begin(), v.end(), [](unsigned char c) {
+                           return std::isxdigit(c) != 0;
+                       });
+            };
+            auto is_mac = [](const std::string& m) {
+                int octets = 0;
+                std::size_t i = 0;
+                while (i < m.size()) {
+                    if (i + 1 >= m.size() || !std::isxdigit(static_cast<unsigned char>(m[i])) ||
+                        !std::isxdigit(static_cast<unsigned char>(m[i + 1])))
+                        return false;
+                    ++octets;
+                    i += 2;
+                    if (i < m.size()) {
+                        if (m[i] != ':') return false;
+                        ++i;
+                    }
+                }
+                return octets == 6;
+            };
+            if (!ltoken.empty() && is_hex32(rid) && is_hex32(wk) && is_mac(mac))
+                parts = {ltoken, rid, mac, wk};
+        }
     }
 
     auto normalized_key = [](std::string key) {
@@ -521,15 +577,18 @@ std::unique_ptr<Bot> Bot::create_ltoken(
         // client: platformID|1, hash2 == hash, + vid/aid. (The first GATEWAY packet is
         // the bare core.rs form protocol|226/ltoken/platformID|2 — see build_login_packet.)
         id.vid = parsed->vid.value_or(std::string());
-        // Provider deliveries carry the device values used to mint the refresh
-        // token. Preserve them in checktoken clientData and the redirect identity;
-        // records without those optional fields keep the proven defaults.
-        id.cbits = parsed->cbits.value_or("1024");
-        id.player_age = parsed->player_age.value_or("19");
+        // Identity tuned to the "more advanced" bombo OAuth reference (matches the
+        // working Lucifer Google/CID client session): tankIDName = the account name,
+        // cbits forced to 1024, GDPR|1, country|us, platformID|1, and a FRESH random
+        // hash2 (not hash2 == hash). player_age comes from the record (default 25).
+        id.tank_id_name = parsed->name.value_or(std::string());
+        id.cbits = "1024";
+        id.player_age = parsed->player_age.value_or("25");
         id.gdpr = "1";
-        id.country = "tr";
+        id.country = "us";
         id.platform_id = parsed->platform_id.value_or("1");
-        id.hash2 = id.hash;  // working reference sends hash2 == hash
+        id.hash2 =
+            std::to_string(nxrth::protocol::hash_string(nxrth::protocol::random_hex(16) + "RT"));
         int hv = 0;
         try {
             hv = std::stoi(id.hash);
@@ -561,7 +620,8 @@ std::unique_ptr<Bot> Bot::create_ltoken(
     const bool provider = !google_refresh_token;
     const std::string client_data = build_checktoken_client_data(
         id, sd->data.meta,
-        provider ? provider_login_protocol() : std::to_string(consts::PROTOCOL));
+        provider ? provider_login_protocol() : std::to_string(consts::PROTOCOL),
+        /*oauth=*/provider);
 
     log("[Bot] validating " + std::string(provider ? "provider" : "Google OAuth") +
         " ltoken through checktoken (" + nxrth::login::token_fingerprint(parsed->token) + ")");
@@ -698,6 +758,10 @@ void Bot::run(std::shared_ptr<std::atomic<bool>> stop_flag) {
 
         // (6) process all pending ENet events.
         service_once();
+
+        // (6b) release any place that the server never confirmed (lag / no build
+        // access) so its reserved item becomes placeable again — without consuming.
+        expire_pending_places();
 
         // (7) login watchdog: 30 s connected with no world = flaky game proxy.
         if (connected_since_ && !world_.has_value() &&
@@ -1210,7 +1274,7 @@ void Bot::refresh_token() {
             // Re-exchange the ORIGINAL refresh token for a fresh session ltoken bound to
             // the new server_data session (the prior session ltoken is single-session).
             const std::string client_data = build_checktoken_client_data(
-                login_identity_view(), meta_, provider_login_protocol());
+                login_identity_view(), meta_, provider_login_protocol(), /*oauth=*/true);
             auto checked = nxrth::login::check_token(login_method_.source_token, client_data,
                                                       refreshed->http_proxy_url);
             if (!checked.ok()) {
@@ -1286,7 +1350,7 @@ std::optional<ServerData> Bot::fetch_server_data_loop() {
 }
 
 // ===========================================================================
-// Native fleet-aware automation seam (replaces Mori's Lua script channel).
+// Native fleet-aware automation seam (replaces Nxrth's Lua script channel).
 // ===========================================================================
 void Bot::add_automation_module(std::unique_ptr<AutomationModule> mod) {
     if (mod) automation_modules_.push_back(std::move(mod));

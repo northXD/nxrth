@@ -71,6 +71,8 @@ void Bot::load_world(const GameUpdatePacket& pkt) {
     players_.clear();
     local_ = LocalPlayer{};
     geiger_green_repeat_.reset();
+    pending_places_.clear();  // no place confirmations carry across worlds
+    place_reserved_.clear();
 
     auto parsed = nxrth::world::World::try_parse(pkt.extra_data.data(), pkt.extra_data.size());
     if (!parsed) {
@@ -191,6 +193,7 @@ void Bot::on_send_tile_update_data(const GameUpdatePacket& pkt) {
             s.tiles[idx].bg_item_id = bg;
         }
     });
+    confirm_place(x, y, fg, bg);  // resolve a pending place at this cell
     notify_dirty();
     log_console("[Bot] TileUpdateData (" + std::to_string(x) + "," + std::to_string(y) + ")");
 }
@@ -221,6 +224,7 @@ void Bot::on_send_tile_update_data_multiple(const GameUpdatePacket& pkt) {
                     s.tiles[idx].bg_item_id = bg;
                 }
             });
+            confirm_place(x, y, fg, bg);  // resolve a pending place at this cell
         }
         offset += 12;  // fixed stride, regardless of actual per-tile payload
     }
@@ -574,13 +578,38 @@ std::vector<std::pair<std::uint32_t, std::uint32_t>> Bot::compute_path(std::uint
 // ===========================================================================
 void Bot::place(std::int32_t offset_x, std::int32_t offset_y, std::uint32_t item_id,
                 bool is_punch) {
-    if (!is_punch && !inventory_.has_item(static_cast<std::uint16_t>(item_id), 1)) return;
+    const std::uint16_t iid = static_cast<std::uint16_t>(item_id);
+    // Fist (18) and wrench (32) don't consume an item; every other place does.
+    const bool consumes = !is_punch && item_id != 18 && item_id != 32;
+
+    if (!is_punch) {
+        std::uint8_t have = 0;
+        if (auto it = inventory_.items.find(iid); it != inventory_.items.end())
+            have = it->second.amount;
+        if (have < 1) return;  // need the item/tool at all
+        // For consumables, subtract in-flight (unconfirmed) places so we never
+        // send more than we actually own.
+        if (consumes) {
+            auto r = place_reserved_.find(iid);
+            const std::uint32_t reserved = (r == place_reserved_.end()) ? 0u : r->second;
+            if (static_cast<std::uint32_t>(have) <= reserved) return;
+        }
+    }
 
     std::int32_t base_x = nxrth::world::pixel_to_tile_floor(pos_x_);
     std::int32_t base_y = nxrth::world::pixel_to_tile_floor(pos_y_);
     std::int32_t tile_x = base_x + offset_x;
     std::int32_t tile_y = base_y + offset_y;
     if (std::abs(tile_x - base_x) > 4 || std::abs(tile_y - base_y) > 4) return;  // ±4 reach
+
+    // Reserve the item and record the pending place BEFORE sending, so the
+    // server's tile-update echo can never race ahead of the pending entry.
+    if (consumes) {
+        pending_places_.push_back(
+            {static_cast<std::uint32_t>(tile_x), static_cast<std::uint32_t>(tile_y), iid,
+             std::chrono::steady_clock::now() + std::chrono::milliseconds(5000)});
+        ++place_reserved_[iid];
+    }
 
     GameUpdatePacket p = make_pkt(GPT::TileChangeRequest);
     p.vector_x = pos_x_;
@@ -597,10 +626,43 @@ void Bot::place(std::int32_t offset_x, std::int32_t offset_y, std::uint32_t item
     send_game_packet(p, true);
 
     sleep_ms(delays_.place_ms);
+    // NOTE: the inventory is decremented in confirm_place() when the server echoes
+    // the tile update for (tile_x,tile_y) — NOT here — so a place that never lands
+    // (lag) or is rejected (no build access) does not wrongly consume an item.
+}
 
-    if (!is_punch && item_id != 18 && item_id != 32) {  // fist/wrench never decrement
-        inventory_.sub_item(static_cast<std::uint16_t>(item_id), 1);
-        emit_inventory_update();
+// A tile update landed at (x,y): if it resolves a pending place, consume the item
+// only when the tile actually shows what we placed.
+void Bot::confirm_place(std::uint32_t x, std::uint32_t y, std::uint16_t fg, std::uint16_t bg) {
+    for (auto it = pending_places_.begin(); it != pending_places_.end(); ++it) {
+        if (it->x != x || it->y != y) continue;
+        const std::uint16_t iid = it->item_id;
+        const bool accepted = (fg == iid) || (bg == iid);  // our item is now on the tile
+        if (auto r = place_reserved_.find(iid); r != place_reserved_.end() && r->second > 0)
+            --r->second;
+        pending_places_.erase(it);
+        if (accepted) {
+            inventory_.sub_item(iid, 1);
+            emit_inventory_update();
+        }
+        return;  // one tile update resolves at most one pending place
+    }
+}
+
+// Drop pending places that were never confirmed within the deadline (lag or no
+// build access): release the reservation, never consume.
+void Bot::expire_pending_places() {
+    if (pending_places_.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = pending_places_.begin(); it != pending_places_.end();) {
+        if (now >= it->deadline) {
+            if (auto r = place_reserved_.find(it->item_id);
+                r != place_reserved_.end() && r->second > 0)
+                --r->second;
+            it = pending_places_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 

@@ -20,7 +20,7 @@ namespace nxrth::bot {
 
 namespace {
 
-// Set the OS thread name to "nxrth-bot-<id>" (spec §7: the only literal `mori`
+// Set the OS thread name to "nxrth-bot-<id>" (spec §7: the only literal `Nxrth`
 // token renamed). Win32-only; a no-op elsewhere. First action on the new thread.
 void set_thread_name(std::uint32_t id) {
 #ifdef _WIN32
@@ -156,7 +156,7 @@ std::uint32_t BotManager::spawn_core(std::string entry_username, bool do_dedup,
                 // Attach every native automation module. Each self-gates per tick
                 // on the shared FleetState's AutomationConfig (UI toggles enable
                 // them live), so attaching all of them once is correct. This is
-                // Nxrth's fleet-aware automation seam — replaces Mori's per-bot Lua.
+                // Nxrth's fleet-aware automation seam — replaces Nxrth's per-bot Lua.
                 for (auto& mod : nxrth::automation::build_all())
                     bot->add_automation_module(std::move(mod));
                 bot->run(stop_flag);  // blocking main loop until stopped/disconnected

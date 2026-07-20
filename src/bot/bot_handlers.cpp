@@ -906,6 +906,7 @@ nxrth::login::LoginIdentity Bot::login_identity_view() const {
     id.platform_id = platform_id_;
     id.steam_token = steam_token_;
     id.vid = vid_;
+    id.tank_id_name = username_;  // OAuth checktoken tankIDName on reconnect re-exchange
     return id;
 }
 

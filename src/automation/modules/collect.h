@@ -1,14 +1,9 @@
 // Nxrth — auto-pickup automation module (fleet-coordinated).
 //
-// Ported intent: Mori's per-bot auto-collect + Lua `collect(range, interval)`
+// Ported intent: Lua `collect(range, interval)`
 // (port spec 11 §1 collect / §6). The engine already has Bot::collect() /
 // Bot::collect_object_at() (bot/bot.h) doing the nearest-first, path-checked
-// pickup. What Mori's per-bot Lua could NOT do is coordinate: two bots standing
-// on the same drop pile both chase every object. This native module adds the
-// fleet coordination the whole port exists for — before a bot activates a ground
-// object it CLAIMS "obj:WORLD:uid" in the shared FleetState, so each dropped item
-// is chased by exactly one bot. Stale claims (item picked up / bot left world)
-// are released so the claim map never leaks.
+// pickup.
 #pragma once
 
 #include <cstdint>

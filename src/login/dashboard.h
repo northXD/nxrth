@@ -1,5 +1,5 @@
 // Nxrth — GrowID dashboard POST + redirect-follow parsing.
-// Ported from Mori/dashboard.rs (see docs/port-specs/05-login.md §4.2).
+// Ported from Nxrth/dashboard.rs (see docs/port-specs/05-login.md §4.2).
 //
 // A dashboard POST hits https://{login_url}/player/login/dashboard, then the
 // login page bounces through up to 4 manual redirects (the agent is built with

@@ -1,4 +1,4 @@
-// Nxrth — world map model + SendMapData byte parser (ported from Mori/world/mod_impl.rs).
+// Nxrth — world map model + SendMapData byte parser (ported from Nxrth/world/mod_impl.rs).
 // Byte-exact reimplementation of the SendMapData blob (tiles, per-tile extra
 // data, ground objects) plus incremental tile updates and coordinate helpers.
 // GT is little-endian throughout; strings are UTF-8 (lossy). Per-bot state,
