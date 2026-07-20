@@ -855,18 +855,15 @@ bool AppUi::ResolveSpawnProxy(std::optional<nxrth::bot::Socks5Config>& out) {
         out = std::move(cfg);
         return true;
     }
-    // No custom proxy -> assign one from the pool.
+    // No custom proxy -> assign one from the pool if it's enabled and has a free
+    // exit; otherwise spawn DIRECT (out stays nullopt). Bot creation is never
+    // blocked on proxy config.
     try {
         out = proxy_pool_.choose(manager_.proxy_key_counts());
-    } catch (const std::exception& e) {
-        add_error_ = e.what();
-        return false;
+    } catch (...) {
+        out.reset();  // pool disabled/empty -> direct
     }
-    if (!out) {
-        add_error_ = "game proxy pool is disabled or unavailable; enter a custom proxy";
-        return false;
-    }
-    return true;
+    return true;  // out may be nullopt => direct spawn
 }
 
 bool AppUi::ResolveLoginProxy(std::optional<nxrth::proxy::RotatingLoginProxy>& out) {
