@@ -273,13 +273,10 @@ ProxyPlan login_attempt_proxies(const std::optional<RotatingLoginProxy>& login_p
         plan.candidates.push_back({"assigned game proxy", *game_proxy_url});
         return plan;
     }
-    // No proxy assigned. A direct login sends the dashboard/token POST through the
-    // REAL IP; at scale that trips Growtopia's per-IP 24h login ban (the "leak").
-    // Refuse it unless the operator explicitly opts in.
-    if (std::getenv("NXRTH_ALLOW_DIRECT_LOGIN"))
-        plan.candidates.push_back({"direct", std::nullopt});
-    else
-        plan.refused_direct = true;
+    // No proxy assigned -> log in DIRECT via the real IP. A direct login can trip
+    // Growtopia's per-IP 24h ban at scale, but if the user runs without proxies that
+    // is their call; don't block it.
+    plan.candidates.push_back({"direct", std::nullopt});
     return plan;
 }
 

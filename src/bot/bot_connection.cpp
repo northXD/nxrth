@@ -99,12 +99,8 @@ std::optional<LtokenServerData> fetch_ltoken_server_data(
         } else if (proxy) {
             proxy_url = socks5_to_url(*proxy);
         }
-        if (!proxy_url && !std::getenv("NXRTH_ALLOW_DIRECT_LOGIN")) {
-            log("[Bot] no proxy assigned - refusing DIRECT ltoken login to protect the real "
-                "IP (set NXRTH_ALLOW_DIRECT_LOGIN=1 to override). Stopping bot.");
-            stop.store(true);
-            return std::nullopt;
-        }
+        if (!proxy_url)
+            log("[Bot] no proxy configured - logging in DIRECT via the real IP.");
 
         log("[Bot] fetching server_data for " +
             std::string(google_refresh_token ? "Google OAuth" : "provider ltoken") +
@@ -189,13 +185,8 @@ std::optional<ServerData> fetch_server_data_free(
             proxy_url = login_proxy->fresh_url();
         else if (current)
             proxy_url = socks5_to_url(*current);
-        else if (!std::getenv("NXRTH_ALLOW_DIRECT_LOGIN")) {
-            // No proxy -> a direct server_data fetch leaks the real IP (24h ban).
-            log("[Bot] no proxy assigned - refusing DIRECT server_data fetch to protect the "
-                "real IP (set NXRTH_ALLOW_DIRECT_LOGIN=1 to override). Stopping bot.");
-            stop.store(true);
-            return std::nullopt;
-        }
+        // No proxy -> direct server_data fetch (uses the real IP). Not blocked: the
+        // user chose to run without proxies.
 
         log("[Bot] fetching server_data (alternate=" + std::string(alternate ? "true" : "false") +
             ")...");

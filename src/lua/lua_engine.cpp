@@ -533,20 +533,20 @@ struct LuaEngine::Impl {
                     proxy_policy = nxrth::bot::ProxyPolicy::Custom;
                 }
             }
-            if (direct && std::getenv("NXRTH_ALLOW_DIRECT_LOGIN") == nullptr)
-                throw std::runtime_error(
-                    "direct login is disabled; configure a proxy or explicitly enable NXRTH_ALLOW_DIRECT_LOGIN");
+            // No proxy -> a direct login uses the real IP. We DON'T block that: if the
+            // user disabled proxies (or never added any) and adds a bot anyway, honour
+            // it and go direct. Only surface a real error when the user EXPLICITLY asked
+            // for a pool proxy that isn't available.
             if (!direct && !proxy) {
                 if (explicit_auto && !s.proxy_pool.config().enabled)
                     throw std::runtime_error("proxy='auto' requires an enabled game proxy pool");
-                if (!explicit_auto && !proxy_value && !proxy_bool &&
-                    !s.proxy_pool.config().enabled)
-                    throw std::runtime_error(
-                        "no game proxy is configured; use proxy='direct' explicitly to allow direct login");
-                proxy = s.proxy_pool.choose(s.manager.proxy_key_counts());
-                if (explicit_auto && !proxy)
-                    throw std::runtime_error("proxy='auto' did not resolve a game proxy");
-                if (proxy) proxy_policy = nxrth::bot::ProxyPolicy::Pool;
+                if (s.proxy_pool.config().enabled) {
+                    proxy = s.proxy_pool.choose(s.manager.proxy_key_counts());
+                    if (explicit_auto && !proxy)
+                        throw std::runtime_error("proxy='auto' did not resolve a game proxy");
+                    if (proxy) proxy_policy = nxrth::bot::ProxyPolicy::Pool;
+                }
+                // pool disabled + no proxy requested -> fall through to a direct spawn.
             }
 
             std::optional<nxrth::proxy::RotatingLoginProxy> login_proxy;
